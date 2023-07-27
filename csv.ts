@@ -1,5 +1,7 @@
 import { parse } from 'csv-parse/sync';
 import * as fs from 'fs';
+import * as dotenv from 'dotenv';
+dotenv.config();
 import { CSVRecord } from './functions';
 import {
   Invoice,
