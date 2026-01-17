@@ -1,0 +1,32 @@
+{
+  "name": "afip_facturador",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "invoices": "bun app.ts",
+    "debug": "PWDEBUG=1 bun app.ts",
+    "csv": "bun csv.ts",
+    "test": "bun test --watch"
+  },
+  "author": "lucas",
+  "license": "ISC",
+  "dependencies": {
+    "@epic-web/invariant": "^1.0.0",
+    "csv-parse": "^6.1.0",
+    "dotenv": "^17.2.3",
+    "luxon": "^3.7.2",
+    "mime-types": "^3.0.2",
+    "playwright": "^1.57.0",
+    "typescript": "^5.9.3",
+    "xlsx": "^0.18.5",
+    "zod": "^4.3.5"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.26.1",
+    "@types/bun": "^1.3.6",
+    "@types/luxon": "^3.7.1",
+    "@types/mime-types": "^3.0.1",
+    "@types/node": "^25.0.9"
+  }
+}
