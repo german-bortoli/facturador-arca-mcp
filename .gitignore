@@ -1,4 +1,7 @@
 .env
-assets
+assets/*
+!assets/.gitkeep
+!assets/example*
 node_modules
 .DS_Store
+!.gitkeep
