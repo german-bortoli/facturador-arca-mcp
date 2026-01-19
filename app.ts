@@ -3,11 +3,9 @@ import {
   navigateToFacturadorPage,
   sleep,
   error,
-  addAccomodationDataToInvoice,
-  addExpensesDataToInvoice,
-  formatNumber,
+  addAccomodationDataToInvoice, formatNumber,
   startNewInvoice,
-  getInvoiceDescription,
+  getInvoiceDescription
 } from './functions';
 import { DateTime } from 'luxon';
 import { parseArgs } from "util";
@@ -42,6 +40,10 @@ const { values, positionals } = parseArgs({
       short: 'f',
       default: `./${process.env.FILE}`,
     },
+    sheet: {
+      type: 'string',
+      short: 's',
+    },
   },
   strict: true,
   allowPositionals: true,
@@ -53,7 +55,7 @@ const getInvoicingDate = () => {
   if (values.now) {
     return today.toFormat('dd/MM/yyyy');
   }
-  
+
   // Logic to issue invoices in the previous month if the day is less than 14th
   if (today.day < 14) {
     return today.minus({ days: today.day }).toFormat('dd/MM/yyyy');
@@ -71,8 +73,14 @@ console.debug(`INVOICES WILL BE ISSUED WITH DATE: ${getInvoicingDate()}`);
   async function main() {
 
     const fileParser = new FileParser();
-    invariant(values.file, 'File argumet is required');
-    const { valid, invalid } = await fileParser.parse(values.file, { schema: ColumnsSchema });
+    invariant(values.file, 'File argument is required');
+    console.debug(`Parsing file ${values.file} with sheet ${values.sheet}`);
+    const { valid, invalid } = await fileParser.parse(values.file, {
+      schema: ColumnsSchema, xlsx: {
+        sheetName: values.sheet || undefined,
+      }
+    });
+
     const validMsg = valid.length > 0 ? `Found ${valid.length} valid invoices\nFound ${invalid.length} invalid invoices:\n${invalid.map(i => JSON.stringify(i)).join('\n')}\nContinue? (y/n)\n` : 'No valid invoices found';
     const res = await prompt(validMsg);
     if (res?.toLowerCase().trim() !== 'y') {
@@ -90,7 +98,7 @@ console.debug(`INVOICES WILL BE ISSUED WITH DATE: ${getInvoicingDate()}`);
     });
 
     for (const inv of valid) {
-      
+
       await sleep(facturadorPage, 1000);
       console.debug(
         `⏳ Issuing ${inv.NOMBRE} invoice for ${inv.TOTAL} ...`
@@ -123,7 +131,7 @@ console.debug(`INVOICES WILL BE ISSUED WITH DATE: ${getInvoicingDate()}`);
         .locator('select[name="idIVAReceptor"]')
         .selectOption('5'); // Consumidor final
 
-      const {invoiceData} = mapInvoiceData(inv);
+      const { invoiceData } = mapInvoiceData(inv);
       const documentType = invoiceData.DocTipo;
       if (!documentType)
         error(

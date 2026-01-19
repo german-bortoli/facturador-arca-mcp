@@ -12,7 +12,7 @@ export interface Invoice {
 
 export interface Expense {
   amount: string;
-  value: string;
+  value: string | number;
   code: string;
   description: string;
 }

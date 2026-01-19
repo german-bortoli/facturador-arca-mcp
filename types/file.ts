@@ -1,5 +1,6 @@
 import { DateTime } from 'luxon';
 import z from 'zod';
+import { cleanDocumentNumber, normalizeDocumentType, parseAmount } from '../utils/data-cleaner';
 
 export interface ParseXlsxOptions {
   /**
@@ -27,11 +28,11 @@ export const ColumnsSchema = z.object({
   NOMBRE: z.string(),
   // For CUIT the address is picked up automatically at AFIP
   DIRECCION: z.string().optional(),
-  TIPO_DOCUMENTO: z.string(),
-  NUMERO: z.string(),
+  TIPO_DOCUMENTO: z.string().transform(val => normalizeDocumentType(val)),
+  NUMERO: z.string().transform(val => cleanDocumentNumber(val)),
   CONCEPTO: z.string(),
   COD: z.string().nullish(),
-  TOTAL: z.string(),
+  TOTAL: z.string().transform((val) => parseAmount(val)),
   FACTURA_TIPO: z.string().nullish(), // Optional: "A" | "B" | "C" (default: "C")
   IVA_GRAVADO: z.string().nullish().transform(val => val ? Number(val) : undefined), // Optional: percentage (default: 100)
   IVA_EXCEMPT: z.string().nullish().transform(val => val ? Number(val) : undefined), // Optional: percentage (default: 0)

@@ -1,29 +1,29 @@
 import { invariant } from '@epic-web/invariant';
-import { ColumnsSchema, type ParseXlsxOptions } from '../types/file';
+import { type ParseXlsxOptions } from '../types/file';
 import { parse } from 'csv-parse/sync';
 import * as XLSX from 'xlsx';
 import mime from 'mime-types';
 import z from 'zod';
 
 export class FileParser {
-  private allowedExtensions = ['csv', 'xlsx'].map(e=>mime.lookup(e));
+  private allowedExtensions = ['csv', 'xlsx'].map(e => mime.lookup(e));
   /**
    * Reads a file and returns its content based on the specified format
    */
-  private async readFile<T extends Record<string, unknown>>(f: Bun.BunFile, config: {as: 'json'}): Promise<T>;
-  private async readFile(f: Bun.BunFile, config: {as: 'text'}): Promise<string>;
-  private async readFile(f: Bun.BunFile, config?: {as: 'arrayBuffer'}): Promise<ArrayBuffer>;
+  private async readFile<T extends Record<string, unknown>>(f: Bun.BunFile, config: { as: 'json' }): Promise<T>;
+  private async readFile(f: Bun.BunFile, config: { as: 'text' }): Promise<string>;
+  private async readFile(f: Bun.BunFile, config?: { as: 'arrayBuffer' }): Promise<ArrayBuffer>;
   private async readFile<T extends Record<string, unknown>>(
-    f: Bun.BunFile, 
-    {as}: {as: 'text' | 'json' | 'arrayBuffer'} = {as: 'arrayBuffer'}
+    f: Bun.BunFile,
+    { as }: { as: 'text' | 'json' | 'arrayBuffer' } = { as: 'arrayBuffer' }
   ): Promise<T | string | ArrayBuffer> {
-    if(as === 'text') {
+    if (as === 'text') {
       return f.text();
     }
-    if(as === 'json') {
+    if (as === 'json') {
       return f.json() as Promise<T>;
     }
-    if(as === 'arrayBuffer') {
+    if (as === 'arrayBuffer') {
       return f.arrayBuffer();
     }
     throw new Error('Invalid format specified');
@@ -52,67 +52,68 @@ export class FileParser {
       includeEmptyRows = false,
       headerMapping = {
         'TIPO DOCUMENTO': 'TIPO_DOCUMENTO',
+        'DIRECCION': 'CONCEPTO',
       }
     } = options ?? {};
 
     const workbook = XLSX.read(buffer, { type: 'buffer' });
     // Get the sheet to parse
-  const sheet = sheetName
-  ? workbook.Sheets[sheetName]
-  : workbook.Sheets[workbook.SheetNames[0] ?? ''];
+    const sheet = sheetName
+      ? workbook.Sheets[sheetName]
+      : workbook.Sheets[workbook.SheetNames[0] ?? ''];
 
-  invariant(sheet, sheetName
-    ? `Sheet "${sheetName}" not found in workbook`
-    : 'No sheets found in workbook');
+    invariant(sheet, sheetName
+      ? `Sheet "${sheetName}" not found in workbook`
+      : 'No sheets found in workbook');
 
 
-  // Convert to JSON based on options
-  if (headerRow) {
-    // Convert to array of objects with headers
+    // Convert to JSON based on options
+    if (headerRow) {
+      // Convert to array of objects with headers
+      const jsonData = XLSX.utils.sheet_to_json(sheet, {
+        defval: null,
+        raw: false,
+        rawNumbers: false,
+      }) as Record<string, unknown>[];
+
+      // Apply header mapping if provided
+      if (headerMapping) {
+        return jsonData.map((row) => {
+          const mappedRow: Record<string, unknown> = {};
+          const headers = Object.keys(row);
+          headers.forEach((header) => {
+            const mappedHeader = headerMapping[header] ?? header;
+            mappedRow[mappedHeader] = row[header];
+          });
+          return mappedRow;
+        });
+      }
+
+      // Filter empty rows if needed
+      if (!includeEmptyRows) {
+        return jsonData.filter((row) =>
+          Object.values(row).some((value) => value !== null && value !== '')
+        );
+      }
+
+      return jsonData;
+    }
+
+    // Convert to array of arrays
     const jsonData = XLSX.utils.sheet_to_json(sheet, {
+      header: 1,
       defval: null,
       raw: false,
-      rawNumbers: false,
-    }) as Record<string, unknown>[];
-
-    // Apply header mapping if provided
-    if (headerMapping) {
-      return jsonData.map((row) => {
-        const mappedRow: Record<string, unknown> = {};
-        const headers = Object.keys(row);
-        headers.forEach((header) => {
-          const mappedHeader = headerMapping[header] ?? header;
-          mappedRow[mappedHeader] = row[header];
-        });
-        return mappedRow;
-      });
-    }
+    }) as unknown[][];
 
     // Filter empty rows if needed
     if (!includeEmptyRows) {
       return jsonData.filter((row) =>
-        Object.values(row).some((value) => value !== null && value !== '')
+        row.some((cell) => cell !== null && cell !== '')
       );
     }
 
     return jsonData;
-  }
-
-  // Convert to array of arrays
-  const jsonData = XLSX.utils.sheet_to_json(sheet, {
-    header: 1,
-    defval: null,
-    raw: false,
-  }) as unknown[][];
-
-  // Filter empty rows if needed
-  if (!includeEmptyRows) {
-    return jsonData.filter((row) =>
-      row.some((cell) => cell !== null && cell !== '')
-    );
-  }
-
-  return jsonData;
 
   }
 
@@ -130,10 +131,10 @@ export class FileParser {
    * @param itemSchema - Zod schema for individual items
    * @returns Array of valid, typed rows
    */
-  filterValidRows<T>(data: any[], itemSchema: z.ZodSchema<T>): {valid: T[], invalid: unknown[]} {
+  filterValidRows<T>(data: any[], itemSchema: z.ZodSchema<T>): { valid: T[], invalid: unknown[] } {
     const valid: T[] = [];
     const invalid: unknown[] = [];
-    
+
     data.forEach((row) => {
       const result = itemSchema.safeParse(row);
       if (result.success) {
@@ -142,7 +143,7 @@ export class FileParser {
         invalid.push(row);
       }
     });
-    
+
     return { valid, invalid };
   }
 
@@ -152,27 +153,29 @@ export class FileParser {
    * @param opts - Options including schema for validation
    * @returns Validated and typed data when schema is provided, raw data otherwise
    */
-  async parse<T>(filePath: string, opts: {xlsx?: ParseXlsxOptions, schema: z.ZodSchema<T>, filterInvalid?: boolean}): Promise<{valid: T[], invalid: unknown[]}>;
-  async parse(filePath: string, opts?: {xlsx?: ParseXlsxOptions}): Promise<{valid: Record<string, unknown>[][], invalid: unknown[]}>;
-  async parse<T>(filePath: string, opts?: {xlsx?: ParseXlsxOptions, schema?: z.ZodSchema<T>, filterInvalid?: boolean}): Promise<{valid: T[] | Record<string, unknown>[] | unknown[][], invalid: unknown[]}> {
+  async parse<T>(filePath: string, opts: { xlsx?: ParseXlsxOptions, schema: z.ZodSchema<T>, filterInvalid?: boolean }): Promise<{ valid: T[], invalid: unknown[] }>;
+  async parse(filePath: string, opts?: { xlsx?: ParseXlsxOptions }): Promise<{ valid: Record<string, unknown>[][], invalid: unknown[] }>;
+  async parse<T>(filePath: string, opts?: { xlsx?: ParseXlsxOptions, schema?: z.ZodSchema<T>, filterInvalid?: boolean }): Promise<{ valid: T[] | Record<string, unknown>[] | unknown[][], invalid: unknown[] }> {
     const file = Bun.file(filePath);
     this.validateFileExtension(file);
     const f = await this.readFile(file);
 
-    let rows: {valid: T[] | Record<string, unknown>[] | unknown[][], invalid: unknown[]} = {valid: [], invalid: []};
-    
-    switch(mime.extension(file.type)) {
+    let rows: { valid: T[] | Record<string, unknown>[] | unknown[][], invalid: unknown[] } = { valid: [], invalid: [] };
+
+    switch (mime.extension(file.type)) {
       case 'csv':
         if (opts?.schema) {
           rows = this.filterValidRows(await this.parseCsv(f), opts.schema);
+        } else {
+          rows = { valid: await this.parseCsv(f), invalid: [] };
         }
-        rows = {valid: await this.parseCsv(f), invalid: []};
         break;
       case 'xlsx':
         if (opts?.schema) {
           rows = this.filterValidRows(await this.parseXlsx(f, opts?.xlsx), opts.schema);
+        } else {
+          rows = { valid: await this.parseXlsx(f, opts?.xlsx), invalid: [] };
         }
-        rows = {valid: await this.parseXlsx(f, opts?.xlsx), invalid: []};
         break;
       default:
         throw new Error('Invalid file type');

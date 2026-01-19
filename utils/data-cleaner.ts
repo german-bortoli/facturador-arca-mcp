@@ -28,7 +28,14 @@ export function cleanDocumentNumber(number: string): string {
  * parseAmount("63 175,00") // 63175.00
  * parseAmount("$329,911") // 329911.00
  */
-export function parseAmount(amount: string): number {
+export function parseAmount(amount: string | number): number {
+  if (typeof amount === 'number') {
+    if (Number.isNaN(amount) || amount <= 0) {
+      throw new Error('Invalid amount format or value: ' + amount);
+    }
+    return amount;
+  }
+
   if (!amount || typeof amount !== 'string') {
     throw new Error('Amount must be a non-empty string');
   }
@@ -212,8 +219,19 @@ export function makeCurrencyParser(locale: string, options: Intl.NumberFormatOpt
   const minusSign = example.find(p => p.type === "minusSign")?.value || "-";
   const plusSign = example.find(p => p.type === "plusSign")?.value || "+";
 
+  // Build character class with special chars properly escaped
+  // Sort chars to put hyphen at the end to avoid range issues in character class
+  const chars = [decimal, minusSign, plusSign].filter(char => char);
+
+  // Separate hyphen from other chars (hyphen must be at start or end of char class)
+  const hyphen = chars.find(c => c === '-');
+  const otherChars = chars.filter(c => c !== '-').map(char => escapeRegExp(char)).join('');
+
+  // Put hyphen at the end of the character class (no need to escape when at the end)
+  const allowedChars = hyphen ? `${otherChars}-` : otherChars;
+
   const nonDigits = new RegExp(
-    `[^0-9${escapeRegExp(decimal)}${escapeRegExp(minusSign)}${escapeRegExp(plusSign)}]`,
+    `[^0-9${allowedChars}]`,
     "g"
   );
 

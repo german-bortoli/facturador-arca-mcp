@@ -33,8 +33,8 @@ export function mapInvoiceData<T extends Columns>(
     defaultInvoiceType?: 'A' | 'B' | 'C';
     date?: Date;
   } = {
-    defaultInvoiceType: 'C',
-  }
+      defaultInvoiceType: 'C',
+    }
 ): {
   invoiceData: AfipInvoiceData;
   documentTypeLabel: string;
@@ -63,7 +63,7 @@ export function mapInvoiceData<T extends Columns>(
     }
   }
 
-  const total = parseAmount(row.TOTAL || '0');
+  const total = parseAmount(row.TOTAL);
   if (total <= 0) {
     throw new Error('TOTAL must be greater than 0');
   }

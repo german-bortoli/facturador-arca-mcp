@@ -2,11 +2,13 @@ import type { Page } from 'playwright';
 import type { Expense, ID_TYPE } from './interfaces';
 import { DateTime } from 'luxon';
 
-const LOGIN_SUFFIX = 'contribuyente_/login.xhtml';
+const LOGIN_SUFFIX = '/contribuyente_/login.xhtml?action=SYSTEM&system=admin_mono';
 const USERNAME = process.env.AFIP_USERNAME!;
 const PASSWORD = process.env.AFIP_PASSWORD!;
 const CUIT_USR_FACTURADOR = process.env.AFIP_ISSUER_CUIT!;
 const BASE_URL = 'https://auth.afip.gob.ar/';
+const PORTAL_MONOTRIBUTO_URL = 'https://monotributo.afip.gob.ar/app/Inicio.aspx';
+const PORTAL_GENERAL_URL = 'https://portalcf.cloud.afip.gob.ar/portal/app/';
 
 if (!USERNAME || !PASSWORD || !CUIT_USR_FACTURADOR) {
   throw new Error(
@@ -64,10 +66,12 @@ export const sleep = async (page: Page, millis: number) =>
   await page.waitForTimeout(millis || 1000);
 
 export const logInUser = async (page: Page) => {
+  const url = await page.url();
   if (
-    (await page.url())?.includes(
+    [PORTAL_MONOTRIBUTO_URL,
       'https://fe.afip.gob.ar/rcel/jsp/index_bis.jsp'
-    )
+    ]
+      .some(loggedUrl => url.includes(loggedUrl))
   ) {
     // Here user should be authed so return;
     Promise.resolve();
@@ -89,25 +93,42 @@ export const logInUser = async (page: Page) => {
   ]);
 };
 
-export const navigateToFacturadorPage = async (page: Page) => {
-  await page.goto(BASE_URL + LOGIN_SUFFIX);
-  if ((await page.title()) !== 'Acceso con Clave Fiscal - ARCA') {
-    error(new Error('Incorrect page title'));
-  }
-  await logInUser(page);
-  // await page.locator('span:has-text("Mis Servicios")').click();
-  const [portalMonotributoPage] = await Promise.all([
-    page.waitForEvent('popup'),
-    page.locator('h3:has-text("Monotributo")').click(),
-  ]);
-  await portalMonotributoPage
-    .locator(`//a[@usr="${CUIT_USR_FACTURADOR}"]`)
-    .click();
+export const navigateToFacturadorPage = async (page: Page, originUrl = BASE_URL + LOGIN_SUFFIX) => {
+  await page.goto(originUrl);
+  await page.waitForLoadState('networkidle');
+  const pageTitle = await page.title();
 
-  await portalMonotributoPage.waitForURL((url )=> {
+  if (pageTitle !== 'Portal de Clave Fiscal') {
+    if ((pageTitle) === 'Acceso con Clave Fiscal - ARCA') {
+      await logInUser(page);
+    } else {
+      error(new Error(`Incorrect page title: ${pageTitle}`));
+    }
+  };
+
+  const url = await page.url();
+
+  let portalMonotributoPage: Page = page;
+  if (url.includes(PORTAL_GENERAL_URL)) {
+    // await page.locator('span:has-text("Mis Servicios")').click();
+    const [_portalMonotributoPage] = await Promise.all([
+      page.waitForEvent('popup'),
+      page.locator('h3:has-text("Monotributo")').click(),
+    ]);
+    portalMonotributoPage = _portalMonotributoPage;
+    const url = await portalMonotributoPage.url();
+    if (url.includes('https://monotributo.afip.gob.ar/app/SelecRepresentado.aspx')) {
+      await portalMonotributoPage
+        .locator(`//a[@usr="${CUIT_USR_FACTURADOR}"]`)
+        .click();
+    }
+  }
+
+  // Url to beign issuing 
+  await portalMonotributoPage.waitForURL((url) => {
     const ALLOWED_URLS = [
-      'https://monotributo.afip.gob.ar/app/Inicio.aspx',
-      'https://monotributo.afip.gob.ar/app/Admin/vRut.aspx'
+      'https://monotributo.afip.gob.ar/app/Admin/vRut.aspx',
+      PORTAL_MONOTRIBUTO_URL
     ]
     return ALLOWED_URLS.some(allowedUrl => url.href.includes(allowedUrl));
   });
@@ -131,14 +152,7 @@ export const navigateToFacturadorPage = async (page: Page) => {
     await logInUser(facturadorPage);
   }
 
-  // if (
-  //   !facturadorUrl.includes('https://fe.afip.gob.ar/rcel/jsp/index_bis.jsp')
-  // ) {
-  //   console.log('facturadorUrl: ', facturadorUrl);
-  //   error(new Error('Incorrect page url'));
-  // }
-
-  await facturadorPage.locator(`text=${process.env.RAZON_SOCIAL}`).click();
+  await facturadorPage.getByRole('button', { name: process.env.RAZON_SOCIAL! }).click();
   return facturadorPage;
 };
 
