@@ -52,7 +52,6 @@ export class FileParser {
       includeEmptyRows = false,
       headerMapping = {
         'TIPO DOCUMENTO': 'TIPO_DOCUMENTO',
-        'DIRECCION': 'CONCEPTO',
       }
     } = options ?? {};
 

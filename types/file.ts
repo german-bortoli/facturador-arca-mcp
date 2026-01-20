@@ -27,7 +27,7 @@ export interface ParseXlsxOptions {
 export const ColumnsSchema = z.object({
   NOMBRE: z.string(),
   // For CUIT the address is picked up automatically at AFIP
-  DIRECCION: z.string().optional(),
+  DOMICILIO: z.string().nullish(),
   TIPO_DOCUMENTO: z.string().transform(val => normalizeDocumentType(val)),
   NUMERO: z.string().transform(val => cleanDocumentNumber(val)),
   CONCEPTO: z.string(),

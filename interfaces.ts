@@ -28,4 +28,6 @@ export enum EXPENSE_DESCRIPTION {
   GastosAdministrativos = 'Gastos administrativos',
   MatriculaInscripción = 'Matricula de inscripción',
   Penalidad = 'Penalidad por retiro anticipado',
+  Honorarios = 'Honorarios',
+  Otros = 'Otros',
 }

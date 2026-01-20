@@ -1,5 +1,5 @@
 import type { Page } from 'playwright';
-import type { Expense, ID_TYPE } from './interfaces';
+import type { Expense } from './interfaces';
 import { DateTime } from 'luxon';
 
 const LOGIN_SUFFIX = '/contribuyente_/login.xhtml?action=SYSTEM&system=admin_mono';
@@ -27,7 +27,7 @@ export const addExpensesDataToInvoice = async (
     .fill(expenses.code);
   await page.locator('#detalle_descripcion2').fill(expenses.description);
   await page.locator('#detalle_cantidad2').fill(expenses.amount);
-  await page.locator('#detalle_precio2').fill(expenses.value);
+  await page.locator('#detalle_precio2').fill(expenses.value.toString());
 };
 
 export const addAccomodationDataToInvoice = async (
@@ -39,7 +39,7 @@ export const addAccomodationDataToInvoice = async (
     .locator('textarea[name="detalleDescripcion"]')
     .fill(expenses.description); // descripción de articulo;
   await page.locator('input[name="detalleCantidad"]').fill(expenses.amount); // cantidad nominal de articulo;
-  await page.locator('input[name="detallePrecio"]').fill(expenses.value); // precio unitario articulo;
+  await page.locator('input[name="detallePrecio"]').fill(expenses.value.toString()); // precio unitario articulo;
 };
 
 export const formatNumber = (value: number) => {
@@ -53,12 +53,11 @@ export const startNewInvoice = async (page: Page) => {
   await page
     .locator('a[role="button"]:has-text("Generar Comprobantes")')
     .click();
+  const ptosVtasPage = 'https://fe.afip.gob.ar/rcel/jsp/buscarPtosVtas.do';
   if (
-    !(await page
-      .url()
-      .includes('https://fe.afip.gob.ar/rcel/jsp/buscarPtosVtas.do'))
+    !(await page.url().includes(ptosVtasPage))
   ) {
-    error(new Error('Incorrect page title'));
+    page.goto(ptosVtasPage);
   }
 };
 
@@ -161,24 +160,6 @@ export const error = async (error: Error) => {
   console.error(error);
   process.exit(1);
 };
-
-export interface CSVRecord {
-  MES: string;
-  Comprobante: string;
-  'N° Comp': string;
-  FECHA: string;
-  MATRICULA: string;
-  HOSPEDAJE: string;
-  DESCRIPCION: string;
-  SERVICIOS: string;
-  TOTAL: string;
-  PAGADOR: string;
-  RESIDENTE: string;
-  'Tipo doc': ID_TYPE;
-  Documento: string;
-  DIRECCION: string;
-}
-
 
 export const getInvoiceDescription = (concept: string, invoiceDate: string) => {
   let description: string = '';
