@@ -23,6 +23,23 @@ export interface ParseXlsxOptions {
   headerMapping?: Record<string, string>;
 }
 
+export interface ParseCsvOptions {
+  /**
+   * Whether to use the first row as headers (default: true).
+   * When true, returns an array of objects with keys from the first row.
+   * When false, returns an array of arrays.
+   */
+  headerRow?: boolean;
+  /**
+   * Whether to include empty rows in the output (default: false).
+   */
+  includeEmptyRows?: boolean;
+  /**
+   * Custom header mapping. If provided, maps column names to custom header names.
+   */
+  headerMapping?: Record<string, string>;
+}
+
 
 export const ColumnsSchema = z.object({
   NOMBRE: z.string(),

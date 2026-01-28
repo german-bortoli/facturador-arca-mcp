@@ -8,7 +8,7 @@ import {
   parseIvaReceiverCode,
   parseDateToAfip,
   makeCurrencyParser,
-} from './data-cleaner';
+} from '../utils/data-cleaner';
 
 describe('cleanDocumentNumber', () => {
   test('should remove spaces from document number', () => {
@@ -89,7 +89,7 @@ describe('parseAmount', () => {
     // @ts-expect-error Testing invalid input type
     expect(() => parseAmount(undefined)).toThrow('Amount must be a non-empty string');
     // @ts-expect-error Testing invalid input type
-    expect(() => parseAmount(123)).toThrow('Amount must be a non-empty string');
+    expect(() => parseAmount({})).toThrow('Amount must be a non-empty string');
   });
 
   test('should handle edge cases with spaces', () => {

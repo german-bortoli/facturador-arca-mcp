@@ -29,6 +29,7 @@ export function cleanDocumentNumber(number: string): string {
  * parseAmount("$329,911") // 329911.00
  */
 export function parseAmount(amount: string | number): number {
+
   if (typeof amount === 'number') {
     if (Number.isNaN(amount) || amount <= 0) {
       throw new Error('Invalid amount format or value: ' + amount);

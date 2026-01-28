@@ -161,14 +161,97 @@ export const error = async (error: Error) => {
   process.exit(1);
 };
 
-export const getInvoiceDescription = (concept: string, invoiceDate: string) => {
+export const getInvoiceDescription = (concept: string, invoiceDate: `${string}/${string}/${string}` | Date) => {
   let description: string = '';
   if (process.env.GLOBAL_CONCEPT) {
     description = process.env.GLOBAL_CONCEPT;
   }
   if (process.env.ADD_MONTH_TO_CONCEPT === 'true') {
-    const date = DateTime.fromFormat(invoiceDate, 'dd/MM/yyyy').setLocale('es').toFormat('MMM yyyy').toUpperCase();
+    const formatted = typeof invoiceDate === 'string' ? DateTime.fromFormat(invoiceDate, 'dd/MM/yyyy') : DateTime.fromJSDate(invoiceDate);
+    if (!formatted.isValid) {
+      throw new Error(`Invalid date: ${invoiceDate}`);
+    }
+    const date = formatted.setLocale('es').toFormat('MMM yyyy').toUpperCase();
     description += description.length === 0 ? date : ` - ${date}`;
   }
-  return description.length > 0 ? `${description} - ${concept}` : concept;
+  return description.length > 0 ? `${concept} - ${description}` : concept;
+}
+
+
+/**
+ * Generates a default invoice code based on the invoice index and current month.
+ * The code format is: [index part][month part] with at least 4 digits total.
+ * 
+ * @param index - The current index of the invoice to issue (default: 1)
+ * @returns A code string with at least 4 digits: index part (padded to at least 2 digits) + month part (always 2 digits)
+ * 
+ * @example
+ * getCurrentDefaultCode(1) => "0101" (if current month is January)
+ * getCurrentDefaultCode(12) => "1212" (if current month is December)
+ * getCurrentDefaultCode(103) => "10301" (if current month is January)
+ */
+export const getCurrentDefaultCode = (index: number = 1) => {
+  // Determine the invoice month using the same logic as getInvoicingDate()
+  // If day < 14, use previous month; otherwise use current month
+  const today = DateTime.now();
+  const invoiceDate = today.day < 14
+    ? today.minus({ days: today.day })
+    : today;
+
+  const month = invoiceDate.month; // 1-12
+
+  // Format index: pad to at least 2 digits, but allow it to grow (01, 12, 103, etc.)
+  const indexPart = index.toString().padStart(2, '0');
+
+  // Format month: always 2 digits (01-12)
+  const monthPart = month.toString().padStart(2, '0');
+
+  return `${indexPart}${monthPart}`;
+}
+
+
+/**
+ * Gets the first day of the month for the given date.
+ * 
+ * @param date - Date in "dd/MM/yyyy" format or a Date object
+ * @returns The first day of the month in "dd/MM/yyyy" format
+ * 
+ * @example
+ * getPeriodFromDate("15/03/2024") => "01/03/2024"
+ * getPeriodFromDate(new Date(2024, 2, 15)) => "01/03/2024"
+ */
+export const getPeriodFromDate = (date: `${string}/${string}/${string}` | Date): `${string}/${string}/${string}` => {
+  const dateTime = typeof date === 'string'
+    ? DateTime.fromFormat(date, 'dd/MM/yyyy')
+    : DateTime.fromJSDate(date);
+
+  if (!dateTime.isValid) {
+    throw new Error(`Invalid date: ${date}`);
+  }
+
+  const firstDayOfMonth = dateTime.startOf('month');
+  return firstDayOfMonth.toFormat('dd/MM/yyyy') as `${string}/${string}/${string}`;
+}
+
+/**
+ * Gets the last day of the month for the given date.
+ * 
+ * @param date - Date in "dd/MM/yyyy" format or a Date object
+ * @returns The last day of the month in "dd/MM/yyyy" format
+ * 
+ * @example
+ * getPeriodToDate("15/03/2024") => "31/03/2024"
+ * getPeriodToDate(new Date(2024, 1, 15)) => "29/02/2024" (leap year)
+ */
+export const getPeriodToDate = (date: `${string}/${string}/${string}` | Date): `${string}/${string}/${string}` => {
+  const dateTime = typeof date === 'string'
+    ? DateTime.fromFormat(date, 'dd/MM/yyyy')
+    : DateTime.fromJSDate(date);
+
+  if (!dateTime.isValid) {
+    throw new Error(`Invalid date: ${date}`);
+  }
+
+  const lastDayOfMonth = dateTime.endOf('month');
+  return lastDayOfMonth.toFormat('dd/MM/yyyy') as `${string}/${string}/${string}`;
 }

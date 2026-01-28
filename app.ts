@@ -5,7 +5,10 @@ import {
   error,
   addAccomodationDataToInvoice, formatNumber,
   startNewInvoice,
-  getInvoiceDescription
+  getInvoiceDescription,
+  getPeriodFromDate,
+  getPeriodToDate,
+  getCurrentDefaultCode
 } from './functions';
 import { DateTime } from 'luxon';
 import { parseArgs } from "util";
@@ -41,18 +44,18 @@ const { values } = parseArgs({
   allowPositionals: true,
 });
 
-const getInvoicingDate = () => {
+const getInvoicingDate = (): `${string}/${string}/${string}` => {
   const today = DateTime.now();
 
   if (values.now) {
-    return today.toFormat('dd/MM/yyyy');
+    return today.toFormat('dd/MM/yyyy') as `${string}/${string}/${string}`;
   }
 
   // Logic to issue invoices in the previous month if the day is less than 14th
   if (today.day < 14) {
-    return today.minus({ days: today.day }).toFormat('dd/MM/yyyy');
+    return today.minus({ days: today.day }).toFormat('dd/MM/yyyy') as `${string}/${string}/${string}`;
   } else {
-    return today.toFormat('dd/MM/yyyy');
+    return today.toFormat('dd/MM/yyyy') as `${string}/${string}/${string}`;
   }
 };
 
@@ -66,7 +69,7 @@ console.debug(`INVOICES WILL BE ISSUED WITH DATE: ${getInvoicingDate()}`);
 
     const fileParser = new FileParser();
     invariant(values.file, 'File argument is required');
-    console.debug(`Parsing file ${values.file} with sheet ${values.sheet}`);
+    console.debug(`Parsing file ${values.file} ${values.sheet ? `with sheet ${values.sheet}` : ''}`);
     const { valid, invalid } = await fileParser.parse(values.file, {
       schema: ColumnsSchema, xlsx: {
         sheetName: values.sheet || undefined,
@@ -94,6 +97,7 @@ console.debug(`INVOICES WILL BE ISSUED WITH DATE: ${getInvoicingDate()}`);
       await dialog.accept();
     });
 
+    let index = 01;
     for (const inv of valid) {
       try {
         await sleep(facturadorPage, 1000);
@@ -121,6 +125,19 @@ console.debug(`INVOICES WILL BE ISSUED WITH DATE: ${getInvoicingDate()}`);
         await facturadorPage
           .locator('select[name="idConcepto"]')
           .selectOption('2'); // Servicios
+
+
+        // Add "Periodo facturación desde/hasta"
+
+
+        const fromDateInput = await facturadorPage.locator('input[name="periodoFacturadoDesde"]');
+        await fromDateInput.fill('');
+        await fromDateInput.fill(getPeriodFromDate(date));
+
+        const toDateInput = await facturadorPage.locator('input[name="periodoFacturadoHasta"]');
+        await toDateInput.fill('');
+        await toDateInput.fill(getPeriodToDate(date));
+
         await facturadorPage.locator('text=Continuar >').click();
 
         // Fill invoice header data
@@ -178,7 +195,7 @@ console.debug(`INVOICES WILL BE ISSUED WITH DATE: ${getInvoicingDate()}`);
         await addAccomodationDataToInvoice(
           facturadorPage,
           {
-            code: inv.COD ? `${inv.COD}` : '001',
+            code: inv.COD ? `${inv.COD}` : getCurrentDefaultCode(index),
             description: description,
             amount: invoiceData.CantReg.toString() || '1',
             value: inv.TOTAL,
@@ -255,6 +272,7 @@ console.debug(`INVOICES WILL BE ISSUED WITH DATE: ${getInvoicingDate()}`);
         //   error(new Error(`Incorrect page title: ${invoiceData.resident}`));
         // }
         console.debug(`✅ Invoice issued successfully: ${inv.NOMBRE}`);
+        index++;
       } catch (e) {
         console.error(`❌ Error issuing invoice ${inv.NOMBRE}: ${e instanceof Error ? e.message : 'Unknown error'}`);
       }
