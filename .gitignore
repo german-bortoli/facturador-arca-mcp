@@ -5,3 +5,4 @@ assets/*
 node_modules
 .DS_Store
 !.gitkeep
+invoices/*.pdf

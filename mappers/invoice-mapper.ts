@@ -170,9 +170,6 @@ export function mapInvoiceData<T extends Columns>(
   // Get current date in AFIP format
   const fecha = getCurrentDateAfip(opts?.date);
 
-  console.log("🚀 ~ invoice-mapper.ts:172 ~ fecha:", fecha);
-
-
   // Parse optional service period and payment due dates
   const fchServDesde = row.FECHA_SERVICIO_DESDE ? parseDateToAfip(row.FECHA_SERVICIO_DESDE) : null;
   const fchServHasta = row.FECHA_SERVICIO_HASTA ? parseDateToAfip(row.FECHA_SERVICIO_HASTA) : null;

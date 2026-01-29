@@ -6,7 +6,7 @@
   "scripts": {
     "invoices": "bun app.ts",
     "debug": "PWDEBUG=1 bun app.ts",
-    "generate": "bunx playwright codegen",
+    "generate": "playwright codegen",
     "csv": "bun csv.ts",
     "test": "bun test --watch"
   },

@@ -97,7 +97,7 @@ console.debug(`INVOICES WILL BE ISSUED WITH DATE: ${getInvoicingDate()}`);
       await dialog.accept();
     });
 
-    let index = 01;
+    let index = 1;
     for (const inv of valid) {
       try {
         await sleep(facturadorPage, 1000);
@@ -137,6 +137,10 @@ console.debug(`INVOICES WILL BE ISSUED WITH DATE: ${getInvoicingDate()}`);
         const toDateInput = await facturadorPage.locator('input[name="periodoFacturadoHasta"]');
         await toDateInput.fill('');
         await toDateInput.fill(getPeriodToDate(date));
+
+        const deadlineDateInput = await facturadorPage.locator('input[name="vencimientoPago"]');
+        await deadlineDateInput.fill('');
+        await deadlineDateInput.fill(getPeriodToDate(date));
 
         await facturadorPage.locator('text=Continuar >').click();
 
