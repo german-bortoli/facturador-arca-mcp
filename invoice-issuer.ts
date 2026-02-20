@@ -457,6 +457,6 @@ export class InvoiceIssuer {
 
     await this.page.locator('text=Menú Principal').click();
     const end = performance.now();
-    console.debug(`[${index}] ✅ Invoice issued successfully: ${inv.NOMBRE} in${DateTime.fromMillis(end - start).toFormat('ss.SSS')} seconds `);
+    console.debug(`[${index}] ✅ Invoice issued successfully: ${inv.NOMBRE} in ${DateTime.fromMillis(end - start).toFormat('ss.SSS')} seconds `);
   }
 }

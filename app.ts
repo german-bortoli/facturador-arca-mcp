@@ -34,6 +34,7 @@ const { values } = parseArgs({
     },
     saveSummary: {
       type: 'string',
+      default: `./summaries`,
     },
     summaryFormat: {
       type: 'string',
