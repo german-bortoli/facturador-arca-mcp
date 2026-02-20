@@ -8,6 +8,7 @@
     "debug": "PWDEBUG=1 bun app.ts",
     "generate": "playwright codegen",
     "csv": "bun csv.ts",
+    "dry-run": "bun file.ts",
     "test": "bun test --watch"
   },
   "author": "lucas",

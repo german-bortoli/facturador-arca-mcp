@@ -7,3 +7,5 @@ node_modules
 !.gitkeep
 invoices/*.pdf
 invoices/*.zip
+.cursor
+.agents
