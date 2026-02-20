@@ -77,8 +77,9 @@ if (process.env.DEBUG === 'true') {
 console.debug(`INVOICES WILL BE ISSUED WITH DATE: ${getInvoicingDate()}`);
 
 
-async function main() {
 
+async function main() {
+  const start = performance.now();
   const fileParser = new FileParser();
   invariant(values.file, 'File argument is required');
   console.debug(`Parsing file ${values.file} ${values.sheet ? `with sheet ${values.sheet}` : ''}`);
@@ -147,10 +148,12 @@ async function main() {
     });
   }
 
-  await context.tracing.stop({ path: `traces/${DateTime.now().toFormat('yyyy-MM-dd_HH-mm-ss')}-${values.file}.zip` });
+  const fileName = String(values.file);
+  await context.tracing.stop({ path: `traces/${DateTime.now().toFormat('yyyy-MM-dd_HH-mm-ss')}-${fileName ? fileName.split('/').pop()?.split('.').shift() : 'unknown'}.zip` });
   await browser.close();
 
-
+  const end = performance.now();
+  console.debug(`Total time: ${DateTime.fromMillis(end - start).toFormat('ss.SSS')} seconds`);
 }
 
 try {

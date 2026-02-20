@@ -9,3 +9,4 @@ invoices/*.pdf
 invoices/*.zip
 .cursor
 .agents
+traces

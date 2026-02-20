@@ -49,6 +49,13 @@ export const formatNumber = (value: number) => {
   }).format(value);
 };
 
+export const formatCurrency = (value: number) => {
+  return new Intl.NumberFormat('es-AR', {
+    style: 'currency',
+    currency: process.env.CURRENCY || 'ARS',
+  }).format(value);
+};
+
 export const startNewInvoice = async (page: Page) => {
   await page
     .locator('a[role="button"]:has-text("Generar Comprobantes")')

@@ -1,11 +1,12 @@
 import type { Page } from 'playwright';
 import type { Columns } from './types/file';
 import { COLUMNS_ORDER } from './types/file';
-import { DateTime } from 'luxon';
+import { DateTime, Duration } from 'luxon';
 import * as XLSX from 'xlsx';
 import {
   sleep,
   addAccomodationDataToInvoice,
+  formatCurrency,
   formatNumber,
   startNewInvoice,
   getInvoiceDescription,
@@ -178,7 +179,7 @@ export class InvoiceIssuer {
       console.log('\nSuccessful:');
       for (const r of successful) {
         console.log(
-          `  - ${r.invoice.NOMBRE} ($${r.invoice.TOTAL}) [${r.duration}ms]`,
+          `  - ${r.invoice.NOMBRE} (${formatCurrency(Number(r.invoice.TOTAL))}) [${Duration.fromMillis(r.duration).toFormat("m'm' s's'")}]`,
         );
       }
     }
@@ -286,6 +287,7 @@ export class InvoiceIssuer {
       timeout.disarm();
       const isTimeout =
         e instanceof Error && e.message.startsWith('Timeout:');
+      console.error(`❌ Invoice failed: ${inv.NOMBRE}`, e);
       return {
         invoice: inv,
         index,
@@ -311,8 +313,9 @@ export class InvoiceIssuer {
     index: number,
     timeout: CancellableTimeout,
   ): Promise<void> {
+    const start = performance.now();
     await sleep(this.page, 1000);
-    console.debug(`⏳ Issuing ${inv.NOMBRE} invoice for ${inv.TOTAL} ...`);
+    console.debug(`[${index}] ⏳ Issuing ${inv.NOMBRE} invoice for ${inv.TOTAL} ...`);
     await startNewInvoice(this.page);
 
     await this.page.locator('select[name="puntoDeVenta"]').selectOption('1');
@@ -415,6 +418,8 @@ export class InvoiceIssuer {
 
     if (process.env.DEBUG === 'true') {
       timeout.disarm();
+      const end = performance.now();
+      console.debug(`[${index}] Invoice not issued due to DEBUG mode: ${inv.NOMBRE} in${DateTime.fromMillis(end - start).toFormat('ss.SSS')} seconds `);
       await sleep(this.page, 10_000);
       return;
     }
@@ -451,6 +456,7 @@ export class InvoiceIssuer {
     await download.delete();
 
     await this.page.locator('text=Menú Principal').click();
-    console.debug(`✅ Invoice issued successfully: ${inv.NOMBRE}`);
+    const end = performance.now();
+    console.debug(`[${index}] ✅ Invoice issued successfully: ${inv.NOMBRE} in${DateTime.fromMillis(end - start).toFormat('ss.SSS')} seconds `);
   }
 }
