@@ -451,7 +451,7 @@ export class InvoiceIssuer {
       this.page.locator('text=Imprimir...').click(),
     ]);
     await download.saveAs(
-      `invoices/factura-${today.year}${today.month}-${inv.NOMBRE}.pdf`,
+      `invoices/factura-${today.year}${today.month}-${inv.NOMBRE}-${index}.pdf`,
     );
     await download.delete();
 
