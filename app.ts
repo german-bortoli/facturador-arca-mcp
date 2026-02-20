@@ -32,6 +32,25 @@ const { values } = parseArgs({
       default: false,
       short: 'r',
     },
+    saveSummary: {
+      type: 'string',
+    },
+    summaryFormat: {
+      type: 'string',
+      default: 'csv',
+    },
+    summaryFailedOnly: {
+      type: 'boolean',
+      default: true,
+    },
+    headless: {
+      type: 'boolean',
+      default: false,
+    },
+    slowMo: {
+      type: 'string',
+      default: '300',
+    },
   },
   strict: true,
   allowPositionals: true,
@@ -85,8 +104,15 @@ async function main() {
     return;
   }
 
-  const browser = await chromium.launch({ headless: false, slowMo: 500 });
-  const page = await browser.newPage();
+  const slowMoMs = Math.max(0, Number(values.slowMo) || 500);
+  const browser = await chromium.launch({
+    headless: values.headless,
+    slowMo: slowMoMs,
+    tracesDir: './traces',
+  });
+  const context = await browser.newContext();
+  await context.tracing.start({ screenshots: true, snapshots: true });
+  const page = await context.newPage();
   const facturadorPage = await navigateToFacturadorPage(page);
 
   facturadorPage.on('dialog', async (dialog) => {
@@ -111,7 +137,20 @@ async function main() {
     }
   }
 
+  if (values.saveSummary) {
+    const format = values.summaryFormat === 'xlsx' ? 'xlsx' : 'csv';
+    issuer.saveSummaryToFile({
+      path: values.saveSummary,
+      format,
+      includeSuccess: !values.summaryFailedOnly,
+      includeFailed: true,
+    });
+  }
+
+  await context.tracing.stop({ path: `traces/${DateTime.now().toFormat('yyyy-MM-dd_HH-mm-ss')}-${values.file}.zip` });
   await browser.close();
+
+
 }
 
 try {

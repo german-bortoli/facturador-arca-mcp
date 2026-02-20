@@ -1,6 +1,8 @@
 import type { Page } from 'playwright';
 import type { Columns } from './types/file';
+import { COLUMNS_ORDER } from './types/file';
 import { DateTime } from 'luxon';
+import * as XLSX from 'xlsx';
 import {
   sleep,
   addAccomodationDataToInvoice,
@@ -14,10 +16,47 @@ import {
 import { mapInvoiceData } from './mappers/invoice-mapper';
 import { DOCUMENT_TYPES } from './types/invoice';
 
+export interface SaveSummaryOptions {
+  /** Output format. Default: 'csv'. */
+  format?: 'csv' | 'xlsx';
+  /** Include successful rows. Default: true. */
+  includeSuccess?: boolean;
+  /** Include failed rows (e.g. for rerun). Default: true. */
+  includeFailed?: boolean;
+  /** Output path. If omitted, generates invoices/run-summary-{timestamp}.{csv|xlsx}. */
+  path?: string;
+}
+
+/**
+ * Serializes a Columns row to a string record suitable for CSV/XLSX output
+ * using the same column schema as input (so the file can be re-fed later).
+ */
+function columnsToSerializable(row: Columns): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const key of COLUMNS_ORDER) {
+    const v = row[key];
+    if (v === null || v === undefined) {
+      out[key] = '';
+    } else if (v instanceof Date) {
+      out[key] = DateTime.fromJSDate(v).toFormat('dd/MM/yyyy');
+    } else if (typeof v === 'number') {
+      out[key] = String(v);
+    } else {
+      out[key] = String(v);
+    }
+  }
+  return out;
+}
+
+function escapeCsvField(value: string): string {
+  if (!/[\n",]/.test(value)) return value;
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
 //TODO: check why this was used
-// const MENU_PPAL_URL = 'https://fe.afip.gob.ar/rcel/jsp/menu_ppal.jsp';
-const MENU_PPAL_URL = 'https://monotributo.afip.gob.ar/app/Admin/vRut.aspx';
-const PORTAL_MONOTRIBUTO_URL = 'https://monotributo.afip.gob.ar/app/Inicio.aspx';
+// const MENU_PPAL_URL = 'https://monotributo.afip.gob.ar/app/Admin/vRut.aspx';
+const MENU_PPAL_URL = 'https://fe.afip.gob.ar/rcel/jsp/menu_ppal.jsp';
+// const PORTAL_MONOTRIBUTO_URL = 'https://monotributo.afip.gob.ar/app/Inicio.aspx';
 
 
 /**
@@ -154,6 +193,73 @@ export class InvoiceIssuer {
     console.log('==========================================\n');
   }
 
+  /**
+   * Writes success and/or failed rows to a CSV or XLSX file using the same
+   * column schema as input, so the file can be re-fed (e.g. to rerun failed only).
+   *
+   * @param opts - Format, which rows to include, and output path.
+   * @returns The path of the written file (or the first path if two files written).
+   */
+  saveSummaryToFile(opts: SaveSummaryOptions = {}): string {
+    const format = opts.format ?? 'csv';
+    const includeSuccess = opts.includeSuccess ?? false;
+    const includeFailed = opts.includeFailed ?? true;
+    const ext = format === 'xlsx' ? '.xlsx' : '.csv';
+    const timestamp = DateTime.now().toFormat('yyyy-MM-dd_HH-mm-ss');
+    const defaultPath = `invoices/run-summary-${timestamp}${ext}`;
+    const basePath = opts.path ?? defaultPath;
+    const pathWithExt = basePath.endsWith(ext) ? basePath : `${basePath.replace(/\.[^.]+$/, '')}${ext}`;
+
+    const successResults = this.results.filter((r) => r.status === 'success');
+    const failedResults = this.results.filter((r) => r.status === 'failed');
+
+    const rowsToWrite: { result: InvoiceRunResult; addStatus: boolean }[] = [];
+    if (includeSuccess) {
+      for (const r of successResults) {
+        rowsToWrite.push({ result: r, addStatus: includeSuccess && includeFailed });
+      }
+    }
+    if (includeFailed) {
+      for (const r of failedResults) {
+        rowsToWrite.push({ result: r, addStatus: includeSuccess && includeFailed });
+      }
+    }
+
+    if (rowsToWrite.length === 0) {
+      console.debug('saveSummaryToFile: no rows to write');
+      return pathWithExt;
+    }
+
+    const addStatusColumn = includeSuccess && includeFailed;
+    const headers = addStatusColumn ? [...COLUMNS_ORDER, 'STATUS'] : COLUMNS_ORDER;
+    const serialized = rowsToWrite.map(({ result, addStatus }) => {
+      const row = columnsToSerializable(result.invoice);
+      if (addStatus) {
+        row['STATUS'] = result.status;
+      }
+      return row;
+    });
+
+    if (format === 'csv') {
+      const headerLine = headers.map((h) => escapeCsvField(h)).join(',');
+      const dataLines = serialized.map((row) =>
+        headers.map((h) => escapeCsvField(row[h] ?? '')).join(','),
+      );
+      const csv = [headerLine, ...dataLines].join('\n');
+      Bun.write(pathWithExt, csv, { createPath: true });
+    } else {
+      const worksheet = XLSX.utils.json_to_sheet(serialized, {
+        header: headers as string[],
+      });
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Summary');
+      XLSX.writeFile(workbook, pathWithExt, { bookType: 'xlsx' });
+    }
+
+    console.debug(`Summary written to ${pathWithExt} (${rowsToWrite.length} rows)`);
+    return pathWithExt;
+  }
+
   private async issueWithTimeout(
     inv: Columns,
     index: number,
@@ -281,6 +387,9 @@ export class InvoiceIssuer {
       }
     }
 
+    // check if this works to await the page to be ready
+    await sleep(this.page, 200);
+
     await this.page.locator('#formadepago4').check();
     await this.page.locator('text=Continuar >').click();
 
@@ -305,12 +414,14 @@ export class InvoiceIssuer {
     }
 
     if (process.env.DEBUG === 'true') {
+      timeout.disarm();
       await sleep(this.page, 10_000);
       return;
     }
 
     // Point of no return: disarm timeout so server-side issuance is not interrupted
     timeout.disarm();
+
     await this.page.locator('text=Continuar >').click();
 
     await this.page.locator(`text=${inv.NUMERO}`).waitFor();

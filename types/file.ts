@@ -58,6 +58,11 @@ export const ColumnsSchema = z.object({
   FECHA_SERVICIO_DESDE: z.string().nullish().transform(val => val ? DateTime.fromFormat(val, 'dd/MM/yyyy').toJSDate() : undefined), // Optional: Service period start date (DD/MM/YYYY or YYYY-MM-DD)
   FECHA_SERVICIO_HASTA: z.string().nullish().transform(val => val ? DateTime.fromFormat(val, 'dd/MM/yyyy').toJSDate() : undefined), // Optional: Service period end date (DD/MM/YYYY or YYYY-MM-DD)
   FECHA_VTO_PAGO: z.string().nullish().transform(val => val ? DateTime.fromFormat(val, 'dd/MM/yyyy').toJSDate() : undefined), // Optional: Payment due date (DD/MM/YYYY or YYYY-MM-DD)
-}).strict()
+}).strict();
+
+/** Column names in schema definition order (for CSV/XLSX output). */
+export const COLUMNS_ORDER = Object.keys(
+  ColumnsSchema.shape,
+) as (keyof z.infer<typeof ColumnsSchema>)[];
 
 export type Columns = z.infer<typeof ColumnsSchema>;
