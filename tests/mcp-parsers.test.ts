@@ -29,6 +29,19 @@ describe('legacy invoice CSV parser', () => {
     expect(parsed.invalid.length).toBe(0);
     expect(parsed.valid[0]!.FECHA_EMISION).toBe('12/03/2026');
   });
+
+  test('accepts Spanish IVA receiver header alias', () => {
+    const csv = [
+      'MES,COMPROBANTE,FECHA,CONCEPTO,TOTAL,PAGADOR,TIPO_DOC,DOCUMENTO,DIRECCION,FORMA_DE_PAGO,CONDICION_IVA_RECEPTOR',
+      'ABRIL,Factura C,12/03/2026,Servicio de programacion de software,150,Cliente Demo Uno,CUIT,20999888776,"Calle Falsa 123, Ciudad Demo, Provincia Demo",Transferencia bancaria,1',
+    ].join('\n');
+
+    const parsed = parseLegacyInvoiceCsvText(csv);
+    expect(parsed.invalid.length).toBe(0);
+    expect(parsed.valid.length).toBe(1);
+    expect(parsed.valid[0]!.IVA_RECEIVER).toBe(1);
+    expect(parsed.valid[0]!.METODO_PAGO).toBe('Transferencia bancaria');
+  });
 });
 
 describe('credentials csv parser', () => {
