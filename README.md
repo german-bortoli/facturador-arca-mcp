@@ -117,6 +117,26 @@ Credential precedence:
 2. `credentialsCsvText`
 3. interactive prompt fallback (if enabled and TTY available)
 
+### Quick test payload (MCP)
+
+Use this payload as a copy-paste starting point for `emit_invoices_from_legacy_csv`:
+
+```json
+{
+  "invoiceCsvText": "MES,Comprobante,N° Comp,FECHA,CONCEPTO,MATRICULA,HOSPEDAJE,SERVICIOS,METODO_PAGO,TOTAL,PAGADOR,RESIDENTE,Tipo doc,Documento,DIRECCION\nABRIL,Factura C,00001-00000001,12/03/2026,Software development service,,150,,Transferencia bancaria,150,Cliente Demo SA,software service,DNI,30111222,\"Calle Falsa 123, Ciudad Demo, Provincia Demo\"",
+  "credentials": {
+    "AFIP_USERNAME": "YOUR_USERNAME_OR_CUIT",
+    "AFIP_PASSWORD": "YOUR_PASSWORD",
+    "AFIP_ISSUER_CUIT": "YOUR_ISSUER_CUIT",
+    "RAZON_SOCIAL": "YOUR_COMPANY_NAME"
+  },
+  "headless": false,
+  "retry": false,
+  "pointOfSale": "1",
+  "debug": true
+}
+```
+
 ### Legacy invoice CSV format (MCP)
 
 Example:
