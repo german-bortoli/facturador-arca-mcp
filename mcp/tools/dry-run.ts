@@ -1,7 +1,7 @@
 import { parseLegacyInvoiceCsvText } from '../parsers/legacy-invoice-csv';
-import type { DryRunLegacyCsvInput } from '../types';
+import type { DryRunCsvInput } from '../types';
 
-export function dryRunLegacyCsv(input: DryRunLegacyCsvInput) {
+export function dryRunCsv(input: DryRunCsvInput) {
   if (!input.invoiceCsvText?.trim()) {
     throw new Error('invoiceCsvText is required');
   }

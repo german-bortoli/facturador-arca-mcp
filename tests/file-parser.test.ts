@@ -12,15 +12,26 @@ describe('FileParser', () => {
     await expect(parser.parse('test.txt')).rejects.toThrow('Invalid file extension');
   });
 
-  test('parses canonical csv fixture', async () => {
-    const result = await parser.parse('./assets/canonical-example.csv', { schema: ColumnsSchema });
-    expect(result).toHaveProperty('valid');
-    expect(result).toHaveProperty('invalid');
-    expect(result.valid.length).toBeGreaterThan(0);
+  test('parses csv with schema', async () => {
+    const tempDir = await mkdtemp(join(process.cwd(), '.tmp-facturador-csv-test-'));
+    const filePath = join(tempDir, 'input.csv');
+    const csv = [
+      'NOMBRE,TIPO DOCUMENTO,NUMERO,CONCEPTO,TOTAL',
+      'Cliente Test,DNI,12345678,Servicio profesional,1000',
+    ].join('\n');
+    try {
+      await writeFile(filePath, csv, 'utf8');
+      const result = await parser.parse(filePath, { schema: ColumnsSchema });
+      expect(result).toHaveProperty('valid');
+      expect(result).toHaveProperty('invalid');
+      expect(result.valid.length).toBeGreaterThan(0);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   test('parses csv without schema', async () => {
-    const result = await parser.parse('./assets/canonical-example.csv');
+    const result = await parser.parse('./csv/example.csv');
     expect(Array.isArray(result.valid)).toBe(true);
     expect(result.invalid.length).toBe(0);
   });

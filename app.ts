@@ -3,11 +3,15 @@ import { navigateToFacturadorPage } from './functions';
 import { DateTime } from 'luxon';
 import { parseArgs } from 'util';
 import { ColumnsSchema } from './types/file';
+import type { Columns } from './types/file';
 import { FileParser } from './file-parser';
 import { invariant } from '@epic-web/invariant';
 import { InvoiceIssuer } from './invoice-issuer';
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
+import { extname } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { parseLegacyInvoiceCsvText } from './mcp/parsers/legacy-invoice-csv';
 
 const { values } = parseArgs({
   args: process.argv.slice(2),
@@ -23,7 +27,7 @@ const { values } = parseArgs({
     file: {
       type: 'string',
       short: 'f',
-      default: `./${process.env.FILE}`,
+      default: process.env.FILE ? `./${process.env.FILE}` : './csv/example.csv',
     },
     sheet: {
       type: 'string',
@@ -107,11 +111,25 @@ async function main() {
   const fileParser = new FileParser();
   invariant(values.file, 'File argument is required');
   console.debug(`Parsing file ${values.file} ${values.sheet ? `with sheet ${values.sheet}` : ''}`);
-  const { valid, invalid } = await fileParser.parse(values.file, {
-    schema: ColumnsSchema, xlsx: {
-      sheetName: values.sheet || undefined,
-    }
-  });
+  let valid: Columns[] = [];
+  let invalid: unknown[] = [];
+  const filePath = String(values.file);
+  const extension = extname(filePath).toLowerCase();
+
+  if (extension === '.csv') {
+    const csvText = await readFile(filePath, 'utf8');
+    const parsed = parseLegacyInvoiceCsvText(csvText);
+    valid = parsed.valid;
+    invalid = parsed.invalid;
+  } else {
+    const parsed = await fileParser.parse(filePath, {
+      schema: ColumnsSchema, xlsx: {
+        sheetName: values.sheet || undefined,
+      }
+    });
+    valid = parsed.valid;
+    invalid = parsed.invalid;
+  }
 
   const msg = valid.length > 0 ? `Found ${valid.length} valid invoices\nFound ${invalid.length} invalid invoices:\n${invalid.map(i => JSON.stringify(i)).join('\n')}\nContinue? (y/n)\n` : 'No valid invoices found';
 

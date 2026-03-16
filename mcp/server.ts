@@ -7,12 +7,12 @@ import {
   McpError,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
-import { dryRunLegacyCsv } from './tools/dry-run';
-import { emitInvoicesFromLegacyCsv } from './tools/emit-invoices';
+import { dryRunCsv } from './tools/dry-run';
+import { emitInvoice } from './tools/emit-invoices';
 import { validateCredentialsSource } from './tools/validate-credentials';
 import type {
-  DryRunLegacyCsvInput,
-  EmitInvoicesFromLegacyCsvInput,
+  DryRunCsvInput,
+  EmitInvoiceInput,
   ValidateCredentialsSourceInput,
 } from './types';
 
@@ -48,8 +48,8 @@ const credentialsObjectSchema = {
 
 const tools: Tool[] = [
   {
-    name: 'emit_invoices_from_legacy_csv',
-    title: 'Emit invoices from legacy CSV',
+    name: 'emit_invoice',
+    title: 'Emit invoice',
     description:
       'Issues AFIP invoices from legacy CSV text. Accepts optional credentials CSV text or explicit credentials fields.',
     inputSchema: {
@@ -129,8 +129,8 @@ const tools: Tool[] = [
     },
   },
   {
-    name: 'dry_run_legacy_csv',
-    title: 'Dry run legacy CSV',
+    name: 'dry_run_csv',
+    title: 'Dry run CSV',
     description:
       'Validates and normalizes legacy CSV text without launching the browser or issuing invoices.',
     inputSchema: {
@@ -194,17 +194,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name } = request.params;
   const rawArgs = (request.params.arguments ?? {}) as Record<string, unknown>;
 
-  if (name === 'emit_invoices_from_legacy_csv') {
-    const result = await emitInvoicesFromLegacyCsv(
-      rawArgs as unknown as EmitInvoicesFromLegacyCsvInput,
+  if (name === 'emit_invoice') {
+    const result = await emitInvoice(
+      rawArgs as unknown as EmitInvoiceInput,
     );
     return {
       content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
     };
   }
 
-  if (name === 'dry_run_legacy_csv') {
-    const result = dryRunLegacyCsv(rawArgs as unknown as DryRunLegacyCsvInput);
+  if (name === 'dry_run_csv') {
+    const result = dryRunCsv(rawArgs as unknown as DryRunCsvInput);
     return {
       content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
     };

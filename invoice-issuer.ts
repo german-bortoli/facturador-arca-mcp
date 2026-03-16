@@ -842,7 +842,10 @@ export class InvoiceIssuer {
 
   private async triggerReceiverDocumentBlur(input: Locator): Promise<void> {
     await input.evaluate((element) => {
-      const field = element as HTMLInputElement;
+      const field = element as {
+        dispatchEvent: (event: Event) => boolean;
+        blur: () => void;
+      };
       field.dispatchEvent(new Event('input', { bubbles: true }));
       field.dispatchEvent(new Event('change', { bubbles: true }));
       field.blur();

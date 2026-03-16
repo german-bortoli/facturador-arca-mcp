@@ -1,7 +1,7 @@
 import { DateTime } from 'luxon';
 import { parseLegacyInvoiceCsvText } from '../parsers/legacy-invoice-csv';
 import { resolveCredentials } from '../credentials-resolver';
-import type { EmitInvoicesFromLegacyCsvInput } from '../types';
+import type { EmitInvoiceInput } from '../types';
 
 function getInvoicingDate(now = false): `${string}/${string}/${string}` {
   const today = DateTime.now();
@@ -39,7 +39,7 @@ async function withLogsRedirectedToStderr<T>(
   }
 }
 
-export async function emitInvoicesFromLegacyCsv(input: EmitInvoicesFromLegacyCsvInput) {
+export async function emitInvoice(input: EmitInvoiceInput) {
   if (!input.invoiceCsvText?.trim()) {
     throw new Error('invoiceCsvText is required');
   }

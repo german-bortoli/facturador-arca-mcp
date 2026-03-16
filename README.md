@@ -1,56 +1,42 @@
 ## AFIP facturador (Playwright + MCP)
 
-This project automates AFIP invoice issuance with Playwright.
+Este proyecto automatiza la emisión de facturas de AFIP con Playwright.
 
-## Fork attribution
+## Atribución del fork
 
-This repository is a fork of [lukasver/facturador](https://github.com/lukasver/facturador).
+Este repositorio es un fork de [lukasver/facturador](https://github.com/lukasver/facturador).
 
-Special thanks to [@lukasver](https://github.com/lukasver) for creating and publishing the base project.
-This fork was created to add more flexibility to the invoicing flow and to provide an MCP server interface for tool-based integrations (for example Cursor/OpenClaw clients).
+Agradecimiento especial a [@lukasver](https://github.com/lukasver) por crear y publicar el proyecto base.
+Este fork se creó para agregar mayor flexibilidad al flujo de facturación y para ofrecer una interfaz de servidor MCP orientada a integraciones por herramientas (por ejemplo, clientes Cursor/OpenClaw).
 
-It supports:
+Incluye:
 
-- **CLI mode** for local file-based runs.
-- **MCP mode** for Cursor/OpenClaw clients over stdio.
+- **Modo CLI** para ejecuciones locales basadas en archivo.
+- **Modo MCP** para clientes Cursor/OpenClaw sobre stdio.
 
-## Install
+## Instalación
 
 ```bash
 npm install
 npx playwright install
 ```
 
-## CSV contracts
+## Contratos CSV
 
-This repository uses two CSV contracts:
+Este repositorio utiliza un único contrato CSV para CLI y MCP:
 
-| Contract | Used by | Example file | Parser |
+| Contrato | Uso | Archivo de ejemplo | Parser |
 |---|---|---|---|
-| Canonical schema | CLI (`npm run invoices`, `npm run dry-run`) | `assets/canonical-example.csv` | `file-parser/index.ts` + `types/file.ts` |
-| Legacy schema | MCP tools (`emit_invoices_from_legacy_csv`, `dry_run_legacy_csv`) | `csv/example.csv` | `mcp/parsers/legacy-invoice-csv.ts` |
+| Esquema legacy (single source of truth) | CLI (`npm run invoices`, `npm run dry-run`) y MCP (`emit_invoice`, `dry_run_csv`) | `csv/example.csv` | `mcp/parsers/legacy-invoice-csv.ts` |
 
-Canonical required columns:
+Notas sobre fechas:
 
-```csv
-NOMBRE,TIPO DOCUMENTO,NUMERO,CONCEPTO,TOTAL
-```
+- `FECHA_EMISION` en CSV legacy acepta `dd/MM/yyyy` o `yyyy-MM-dd`.
+- Las fechas de servicio/pago aceptan `dd/MM/yyyy` o `yyyy-MM-dd`.
 
-Canonical optional columns:
+## Uso por CLI
 
-- `DOMICILIO`, `COD`, `FECHA_EMISION`, `FACTURA_TIPO`
-- `METODO_PAGO` (for example `Transferencia bancaria`, `Otros`)
-- `IVA_GRAVADO`, `IVA_EXCEMPT`, `IVA_PERCENTAGE`, `IVA_RECEIVER`
-- `FECHA_SERVICIO_DESDE`, `FECHA_SERVICIO_HASTA`, `FECHA_VTO_PAGO`
-
-Date support notes:
-
-- `FECHA_EMISION` in legacy CSV accepts `dd/MM/yyyy` or `yyyy-MM-dd`.
-- Service/payment dates accept `dd/MM/yyyy` or `yyyy-MM-dd`.
-
-## CLI usage
-
-Required env vars:
+Variables de entorno requeridas:
 
 ```bash
 AFIP_USERNAME=username
@@ -60,66 +46,66 @@ RAZON_SOCIAL="PEPITO SRL"
 FILE=filename.csv
 ```
 
-Run invoices:
+Ejecutar emisión de facturas:
 
 ```bash
 npm run invoices -- --file=./path/to/file.xlsx
 ```
 
-Run in visual mode:
+Ejecutar en modo visual:
 
 ```bash
 npm run invoices -- --file=./path/to/file.xlsx --headless=false
 ```
 
-Dry run:
+Ejecución de validación (dry run):
 
 ```bash
 npm run dry-run -- --file=./path/to/file.xlsx
 ```
 
-## MCP server usage
+## Uso del servidor MCP
 
-Start MCP server:
+Iniciar servidor MCP:
 
 ```bash
 npm run mcp:server
 ```
 
-Available tools:
+Tools disponibles:
 
-- `emit_invoices_from_legacy_csv`
-- `dry_run_legacy_csv`
+- `emit_invoice`
+- `dry_run_csv`
 - `validate_credentials_source`
 
-### `emit_invoices_from_legacy_csv` inputs
+### Inputs de `emit_invoice`
 
-Required:
+Requeridos:
 
-- `invoiceCsvText`: raw legacy CSV text (example format in `csv/example.csv`).
+- `invoiceCsvText`: texto CSV legacy crudo (formato de ejemplo en `csv/example.csv`).
 
-Optional:
+Opcionales:
 
 - `credentialsCsvText`
 - `credentials` (`AFIP_USERNAME`, `AFIP_PASSWORD`, `AFIP_ISSUER_CUIT`, `RAZON_SOCIAL`)
 - `allowInteractivePrompt`
 - `preferredIssuerCuit`
-- `headless` (defaults to true; accepts boolean or string values)
+- `headless` (por defecto `true`; acepta boolean o string)
 - `slowMoMs`, `retry`
 - `pointOfSale`
 - `saveSummaryPath`, `summaryFormat`, `summaryFailedOnly`
 - `currency`, `globalConcept`, `addMonthToConcept`
 - `now`, `debug`
 
-Credential precedence:
+Precedencia de credenciales:
 
-1. explicit `credentials`
+1. `credentials` explícitas
 2. `credentialsCsvText`
-3. interactive prompt fallback (if enabled and TTY available)
+3. fallback interactivo por prompt (si está habilitado y hay TTY disponible)
 
-### Quick test payload (MCP)
+### Payload rápido de prueba (MCP)
 
-Use this payload as a copy-paste starting point for `emit_invoices_from_legacy_csv`:
+Usá este payload como punto de partida copy-paste para `emit_invoice`:
 
 ```json
 {
@@ -137,72 +123,72 @@ Use this payload as a copy-paste starting point for `emit_invoices_from_legacy_c
 }
 ```
 
-### Legacy invoice CSV format (MCP)
+### Formato del CSV legacy de facturas (MCP)
 
-Example:
+Ejemplo:
 
 ```csv
 MES,COMPROBANTE,NRO_COMP,FECHA,CONCEPTO,MATRICULA,HOSPEDAJE,SERVICIOS,FORMA_DE_PAGO,TOTAL,PAGADOR,RESIDENTE,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR
 ABRIL,Factura C,00001-00000001,12/03/2026,Servicio de programacion de software,,150,,Otros,150,Cliente Demo Uno,servicio de programacion de software,DNI,30111222,"Calle Falsa 123, Ciudad Demo, Provincia Demo",5
 ```
 
-Notes:
+Notas:
 
-- `Comprobante` is optional (`Factura A/B/C` or `A/B/C`).
-- If `Comprobante` is missing/invalid, first available AFIP option is used.
-- `CONCEPTO` is preferred if provided; otherwise a legacy fallback concept is built.
-- `METODO_PAGO` is optional. If empty/missing, the flow selects `Otros` by default.
+- `Comprobante` es opcional (`Factura A/B/C` o `A/B/C`).
+- Si `Comprobante` falta o es inválido, se usa la primera opción disponible en AFIP.
+- `CONCEPTO` tiene prioridad si está presente; si no, se construye un concepto legacy de respaldo.
+- `FORMA_DE_PAGO`/`METODO_PAGO` es opcional. Si falta o está vacío, el flujo selecciona `Otros` por defecto.
 
-### Legacy CSV fields reference (`csv/example.csv`)
+### Referencia de campos del CSV legacy (`csv/example.csv`)
 
-Headers are normalized case-insensitively and accent-insensitively. For example, `Tipo doc`, `TIPO DOC`, and `tipodoc` are treated as the same header.
+Los headers se normalizan sin distinguir mayúsculas/minúsculas ni acentos. Por ejemplo, `Tipo doc`, `TIPO DOC` y `tipodoc` se interpretan como el mismo header.
 
-| Header | Required | Supported values / format | Behavior |
+| Header | Requerido | Valores / formato soportado | Comportamiento |
 |---|---|---|---|
-| `PAGADOR` | Yes | Any non-empty string | Mapped to `NOMBRE` (receiver name). |
-| `Tipo doc` | Yes | Commonly `DNI`, `CUIT`, `CUIL` (case-insensitive) | Mapped to `TIPO_DOCUMENTO`. Unknown values are treated as `CONSUMIDOR FINAL` in AFIP mapping. |
-| `Documento` | Yes | Numeric string (with or without separators like `.` `,` `-` spaces) | Mapped to `NUMERO`; separators are removed before AFIP mapping. |
-| `TOTAL` | Yes | Positive number (e.g. `150`, `150.50`, `150,50`, `$150`) | Parsed to numeric amount. Must be > 0. |
-| `CONCEPTO` | No | Any string | If present, used as invoice description. |
-| `COMPROBANTE` | No | `A`, `B`, `C`, `Factura A`, `Factura B`, `Factura C` | Mapped to `FACTURA_TIPO`; if missing/invalid, first AFIP option is selected. |
-| `FECHA` | No | `dd/MM/yyyy` or `yyyy-MM-dd` | Mapped to `FECHA_EMISION`; if missing/invalid, app fallback date is used. |
-| `DIRECCION` | No | Any string | Mapped to `DOMICILIO`. Required at runtime for some DNI flows. |
-| `FORMA_DE_PAGO` | No | Any label (e.g. `Transferencia bancaria`, `Otros`) | Preferred Spanish header for payment method. Tries dynamic AFIP matching by text/value; falls back to `Otros`, then first available option. |
-| `COD` | No | Any string | Mapped to optional item code in invoice detail. |
-| `IVA_GRAVADO` | No | Number (percentage) | Defaults to `100` when omitted. |
-| `IVA_EXENTO` | No | Number (percentage) | Preferred Spanish header. Defaults to `0` when omitted. |
-| `ALICUOTA_IVA` | No | Number (e.g. `21`, `10.5`, `27`) | Preferred Spanish header. Defaults to `21` when omitted. |
-| `CONDICION_IVA_RECEPTOR` | No | Integer code `1..16` | Preferred Spanish header. Maps to AFIP IVA receiver condition. Defaults to `6` when omitted/invalid. |
-| `FECHA_SERVICIO_DESDE` | No | `dd/MM/yyyy` or `yyyy-MM-dd` | Optional service period start date. |
-| `FECHA_SERVICIO_HASTA` | No | `dd/MM/yyyy` or `yyyy-MM-dd` | Optional service period end date. |
-| `FECHA_VTO_PAGO` | No | `dd/MM/yyyy` or `yyyy-MM-dd` | Optional payment due date. |
-| `MATRICULA` / `HOSPEDAJE` / `SERVICIOS` / `MES` / `RESIDENTE` | No | Legacy text/amount fields | Used only to build fallback concept when `CONCEPTO` is empty. |
-| `NRO_COMP` | No | Any string | Accepted but currently not used by the parser mapping. |
+| `PAGADOR` | Sí | Cualquier string no vacío | Se mapea a `NOMBRE` (nombre del receptor). |
+| `Tipo doc` | Sí | Habitualmente `DNI`, `CUIT`, `CUIL` (sin distinguir mayúsculas/minúsculas) | Se mapea a `TIPO_DOCUMENTO`. Valores desconocidos se tratan como `CONSUMIDOR FINAL` en el mapeo AFIP. |
+| `Documento` | Sí | String numérico (con o sin separadores como `.` `,` `-` espacios) | Se mapea a `NUMERO`; los separadores se eliminan antes del mapeo AFIP. |
+| `TOTAL` | Sí | Número positivo (ej. `150`, `150.50`, `150,50`, `$150`) | Se parsea a monto numérico. Debe ser > 0. |
+| `CONCEPTO` | No | Cualquier string | Si está presente, se usa como descripción de la factura. |
+| `COMPROBANTE` | No | `A`, `B`, `C`, `Factura A`, `Factura B`, `Factura C` | Se mapea a `FACTURA_TIPO`; si falta o es inválido, se selecciona la primera opción AFIP. |
+| `FECHA` | No | `dd/MM/yyyy` o `yyyy-MM-dd` | Se mapea a `FECHA_EMISION`; si falta o es inválida, se usa la fecha fallback de la app. |
+| `DIRECCION` | No | Cualquier string | Se mapea a `DOMICILIO`. En ciertos flujos con DNI es obligatorio en runtime. |
+| `FORMA_DE_PAGO` | No | Cualquier etiqueta (ej. `Transferencia bancaria`, `Otros`) | Método de pago. Intenta matching dinámico AFIP por texto/valor; fallback a `Otros` y luego a la primera opción disponible. |
+| `COD` | No | Cualquier string | Se mapea a código opcional de ítem en el detalle. |
+| `IVA_GRAVADO` | No | Número (porcentaje) | Por defecto `100` cuando se omite. |
+| `IVA_EXENTO` | No | Número (porcentaje) | Por defecto `0` cuando se omite. |
+| `ALICUOTA_IVA` | No | Número (ej. `21`, `10.5`, `27`) | Por defecto `21` cuando se omite. |
+| `CONDICION_IVA_RECEPTOR` | No | Código entero `1..16` | Se mapea a condición IVA del receptor en AFIP. Por defecto `6` cuando falta o es inválido. |
+| `FECHA_SERVICIO_DESDE` | No | `dd/MM/yyyy` o `yyyy-MM-dd` | Fecha opcional de inicio del período de servicio. |
+| `FECHA_SERVICIO_HASTA` | No | `dd/MM/yyyy` o `yyyy-MM-dd` | Fecha opcional de fin del período de servicio. |
+| `FECHA_VTO_PAGO` | No | `dd/MM/yyyy` o `yyyy-MM-dd` | Fecha opcional de vencimiento de pago. |
+| `MATRICULA` / `HOSPEDAJE` / `SERVICIOS` / `MES` / `RESIDENTE` | No | Campos legacy de texto/monto | Se usan solo para construir el concepto de respaldo cuando `CONCEPTO` está vacío. |
+| `NRO_COMP` | No | Cualquier string | Aceptado pero actualmente no se usa en el mapeo del parser. |
 
-Accepted aliases for payment method header:
+Aliases aceptados para el header de método de pago:
 
-- `FORMA_DE_PAGO` (recommended)
+- `FORMA_DE_PAGO` (recomendado)
 - `METODO_PAGO`
 - `FORMA_PAGO` / `FORMAPAGO`
 - `CONDICION_DE_VENTA` / `CONDICIONDEVENTA`
 
-Parser-required headers (minimum to pass structural validation):
+Headers requeridos por el parser (mínimos para validación estructural):
 
 - `TOTAL`
 - `PAGADOR`
-- `TIPO_DOC` (for example `Tipo doc`)
+- `TIPO_DOC` (por ejemplo `Tipo doc`)
 - `DOCUMENTO`
 
-Accepted aliases for IVA receiver condition header:
+Aliases aceptados para el header de condición IVA del receptor:
 
-- `CONDICION_IVA_RECEPTOR` (recommended)
+- `CONDICION_IVA_RECEPTOR` (recomendado)
 - `CONDICIONIVA`
 - `IVA_RECEPTOR`
-- `IVA_RECEIVER` (backward compatibility)
+- `IVA_RECEIVER` (compatibilidad hacia atrás)
 
-`CONDICION_IVA_RECEPTOR` supported codes:
+Códigos soportados de `CONDICION_IVA_RECEPTOR`:
 
-| Code | IVA condition label |
+| Código | Etiqueta condición IVA |
 |---|---|
 | `1` | Responsable inscripto |
 | `4` | Sujeto exento |
@@ -216,31 +202,31 @@ Accepted aliases for IVA receiver condition header:
 | `15` | IVA no alcanzado |
 | `16` | Monotributo trabajador independiente promovido |
 
-Notes:
+Notas:
 
-- In current UI automation, `DNI` flows force IVA condition `5` (Consumidor final).
-- For `CUIT`/`CUIL`, `CONDICION_IVA_RECEPTOR` is respected (or falls back to `6` when missing/invalid).
+- En la automatización UI actual, los flujos con `DNI` fuerzan condición IVA `5` (Consumidor final).
+- Para `CUIT`/`CUIL`, `CONDICION_IVA_RECEPTOR` se respeta (o hace fallback a `6` si falta o es inválido).
 
-## Verification
+## Verificación
 
-Run tests:
+Ejecutar tests:
 
 ```bash
 npm run test:run
 ```
 
-Run type check:
+Ejecutar chequeo de tipos:
 
 ```bash
 npx tsc --noEmit
 ```
 
-Regression checklist:
+Checklist de regresión:
 
-- Validate legacy CSV using `dry_run_legacy_csv` (including both date formats).
-- Validate credential source resolution via `validate_credentials_source`.
-- Emit one invoice and verify:
-  - dynamic point-of-sale and comprobante selection
-  - receiver address handling for DNI and CUIT/CUIL flows
-  - PDF generated in `invoices/`
-  - summary + metadata files written when `saveSummaryPath` is provided
+- Validar CSV legacy con `dry_run_csv` (incluyendo ambos formatos de fecha).
+- Validar resolución de credenciales con `validate_credentials_source`.
+- Emitir una factura y verificar:
+  - selección dinámica de punto de venta y comprobante
+  - manejo de domicilio del receptor para flujos DNI y CUIT/CUIL
+  - PDF generado en `invoices/`
+  - archivos de summary + metadata escritos cuando se informa `saveSummaryPath`

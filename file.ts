@@ -1,7 +1,11 @@
 import { parseArgs } from 'node:util';
 import { FileParser } from './file-parser';
 import { ColumnsSchema } from './types/file';
+import type { Columns } from './types/file';
 import { invariant } from '@epic-web/invariant';
+import { extname } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { parseLegacyInvoiceCsvText } from './mcp/parsers/legacy-invoice-csv';
 
 
 const { values } = parseArgs({
@@ -18,7 +22,7 @@ const { values } = parseArgs({
     file: {
       type: 'string',
       short: 'f',
-      default: `./${process.env.FILE}`,
+      default: process.env.FILE ? `./${process.env.FILE}` : './csv/example.csv',
     },
     sheet: {
       type: 'string',
@@ -50,11 +54,25 @@ async function main() {
   const fileParser = new FileParser();
   invariant(values.file, 'File argument is required');
   console.debug(`Parsing file ${values.file} with sheet ${values.sheet}`);
-  const { valid, invalid } = await fileParser.parse(values.file, {
-    schema: ColumnsSchema, xlsx: {
-      sheetName: values.sheet || undefined,
-    }
-  });
+  let valid: Columns[] = [];
+  let invalid: unknown[] = [];
+  const filePath = String(values.file);
+  const extension = extname(filePath).toLowerCase();
+
+  if (extension === '.csv') {
+    const csvText = await readFile(filePath, 'utf8');
+    const parsed = parseLegacyInvoiceCsvText(csvText);
+    valid = parsed.valid;
+    invalid = parsed.invalid;
+  } else {
+    const parsed = await fileParser.parse(filePath, {
+      schema: ColumnsSchema, xlsx: {
+        sheetName: values.sheet || undefined,
+      }
+    });
+    valid = parsed.valid;
+    invalid = parsed.invalid;
+  }
 
   logTable('✅ VALID OCCURRENCES', valid);
   logTable('❌ INVALID OCCURRENCES', invalid);

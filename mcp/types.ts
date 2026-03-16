@@ -5,7 +5,7 @@ export interface CredentialInput {
   RAZON_SOCIAL?: string;
 }
 
-export interface EmitInvoicesFromLegacyCsvInput {
+export interface EmitInvoiceInput {
   invoiceCsvText: string;
   credentialsCsvText?: string;
   credentials?: CredentialInput;
@@ -25,9 +25,13 @@ export interface EmitInvoicesFromLegacyCsvInput {
   debug?: boolean;
 }
 
-export interface DryRunLegacyCsvInput {
+export interface DryRunCsvInput {
   invoiceCsvText: string;
 }
+
+// Backward-compatible type aliases for older internal references.
+export type EmitInvoicesFromLegacyCsvInput = EmitInvoiceInput;
+export type DryRunLegacyCsvInput = DryRunCsvInput;
 
 export interface ValidateCredentialsSourceInput {
   credentialsCsvText?: string;
