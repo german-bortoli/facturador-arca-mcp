@@ -64,9 +64,13 @@ function escapeCsvField(value: string): string {
 
 function sanitizePathSegment(value: string): string {
   return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')   // strip diacritics (á→a, ñ→n, etc.)
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, '')      // remove anything that isn't alphanumeric, space, or hyphen
     .trim()
-    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
-    .replace(/\s+/g, ' ')
+    .replace(/[\s-]+/g, '-')           // collapse spaces and hyphens into a single hyphen
+    .replace(/^-+|-+$/g, '')           // strip leading/trailing hyphens
     .slice(0, 120);
 }
 
@@ -173,6 +177,11 @@ export class InvoiceIssuer {
   /** Returns only the failed results from the last run(s). */
   getFailedResults(): InvoiceRunResult[] {
     return this.results.filter((r) => r.status === 'failed');
+  }
+
+  /** Returns only the successful results from the last run(s). */
+  getSuccessResults(): InvoiceRunResult[] {
+    return this.results.filter((r) => r.status === 'success');
   }
 
   /**
@@ -517,7 +526,8 @@ export class InvoiceIssuer {
       this.page.locator('text=Imprimir...').click(),
     ]);
     const safeName = sanitizePathSegment(inv.NOMBRE || `invoice-${index}`);
-    const outputPdfPath = `invoices/factura-${today.year}${String(today.month).padStart(2, '0')}-${safeName}-${index}.pdf`;
+    const shortHash = Math.random().toString(16).slice(2, 6);
+    const outputPdfPath = `invoices/factura-${today.year}${String(today.month).padStart(2, '0')}-${safeName}-${index}-${shortHash}.pdf`;
     await download.saveAs(outputPdfPath);
     await download.delete();
 

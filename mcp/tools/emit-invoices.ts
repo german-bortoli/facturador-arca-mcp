@@ -1,6 +1,8 @@
 import { DateTime } from 'luxon';
+import { basename } from 'node:path';
 import { parseLegacyInvoiceCsvText } from '../parsers/legacy-invoice-csv';
 import { resolveCredentials } from '../credentials-resolver';
+import { startInvoiceHttpServer } from '../invoice-http-server';
 import type { EmitInvoiceInput } from '../types';
 
 function getInvoicingDate(now = false): `${string}/${string}/${string}` {
@@ -135,6 +137,27 @@ export async function emitInvoice(input: EmitInvoiceInput) {
         isTimeout: result.isTimeout,
       }));
 
+      const resolvedHost = input.serverHost ?? process.env.INVOICE_SERVER_HOST;
+      const fileServerPort = Number(process.env.INVOICE_HTTP_SERVER_PORT ?? 8876);
+
+      if (resolvedHost) {
+        startInvoiceHttpServer(fileServerPort);
+      }
+
+      const issued = issuer
+        .getSuccessResults()
+        .filter((r) => r.artifactPath)
+        .map((r) => {
+          const entry: { name: string; artifactPath: string; downloadUrl?: string } = {
+            name: r.invoice.NOMBRE ?? '',
+            artifactPath: r.artifactPath!,
+          };
+          if (resolvedHost) {
+            entry.downloadUrl = `${resolvedHost}:${fileServerPort}/public/invoices/${basename(r.artifactPath!)}`;
+          }
+          return entry;
+        });
+
       return {
         invoicingDate: getInvoicingDate(Boolean(input.now)),
         headlessUsed,
@@ -144,6 +167,7 @@ export async function emitInvoice(input: EmitInvoiceInput) {
         successCount: parsed.valid.length - failed.length,
         failedCount: failed.length,
         failed,
+        issued,
         summaryPath,
         summaryMetadataPath,
         tracePath,

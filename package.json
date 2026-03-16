@@ -9,7 +9,7 @@
     "generate": "playwright codegen",
     "csv": "tsx csv.ts",
     "dry-run": "tsx file.ts",
-    "mcp:server": "tsx mcp/server.ts",
+    "mcp:server": "tsx --env-file-if-exists=.env mcp/server.ts",
     "test": "vitest --watch",
     "test:run": "vitest run"
   },

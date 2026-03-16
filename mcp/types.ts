@@ -23,6 +23,12 @@ export interface EmitInvoiceInput {
   addMonthToConcept?: boolean;
   now?: boolean;
   debug?: boolean;
+  /**
+   * Base URL (without port) of this server, e.g. "http://localhost".
+   * When provided, emit_invoice returns a downloadUrl for each generated PDF.
+   * Falls back to the INVOICE_SERVER_HOST env var when omitted.
+   */
+  serverHost?: string;
 }
 
 export interface DryRunCsvInput {

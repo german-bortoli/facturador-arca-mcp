@@ -82,6 +82,93 @@ Tools disponibles:
 - `dry_run_csv`
 - `validate_credentials_source`
 
+### Variables de entorno
+
+| Variable | Ejemplo | Descripción |
+|---|---|---|
+| `INVOICE_SERVER_HOST` | `http://localhost` | URL base (sin puerto) para construir las URLs de descarga de PDFs. Cuando está configurada, `emit_invoice` incluye `downloadUrl` por cada factura emitida. |
+| `INVOICE_HTTP_SERVER_PORT` | `8876` | Puerto del servidor HTTP embebido que sirve los PDFs generados bajo `/public/invoices/`. Por defecto `8876`. |
+| `INVOICE_MCP_SERVER_PORT` | `9000` | Puerto del transporte HTTP/SSE del servidor MCP. Opcional: si no está configurado, el servidor corre únicamente por stdio. |
+
+### Configuración en Claude Desktop
+
+**Modo stdio — solo MCP, sin descarga de PDFs:**
+
+Claude Desktop lanza el proceso directamente. No se carga ningún `.env`, por lo que las variables van en el campo `"env"` del config.
+
+```json
+{
+  "mcpServers": {
+    "facturador": {
+      "command": "npx",
+      "args": ["tsx", "/ruta/al/proyecto/mcp/server.ts"]
+    }
+  }
+}
+```
+
+**Modo stdio — con servidor de descarga de PDFs:**
+
+Agregar `INVOICE_SERVER_HOST` y `INVOICE_HTTP_SERVER_PORT` en `"env"`. El servidor HTTP arranca automáticamente dentro del mismo proceso y los links de descarga aparecen en la respuesta de `emit_invoice`.
+
+```json
+{
+  "mcpServers": {
+    "facturador": {
+      "command": "npx",
+      "args": ["tsx", "/ruta/al/proyecto/mcp/server.ts"],
+      "env": {
+        "INVOICE_SERVER_HOST": "http://localhost",
+        "INVOICE_HTTP_SERVER_PORT": "8876"
+      }
+    }
+  }
+}
+```
+
+> `INVOICE_MCP_SERVER_PORT` no es necesario en modo stdio. Solo se usa para exponer el transporte HTTP/SSE adicional (ver modo HTTP más abajo).
+
+**Modo HTTP/SSE** (conectar a un servidor ya en ejecución):
+
+Iniciar el servidor manualmente con `INVOICE_MCP_SERVER_PORT` configurado (por `.env` o variable de entorno), y luego apuntar el cliente al endpoint HTTP:
+
+```bash
+INVOICE_SERVER_HOST=http://localhost \
+INVOICE_HTTP_SERVER_PORT=8876 \
+INVOICE_MCP_SERVER_PORT=9000 \
+npx tsx mcp/server.ts
+```
+
+```json
+{
+  "mcpServers": {
+    "facturador": {
+      "type": "http",
+      "url": "http://localhost:9000/mcp"
+    }
+  }
+}
+```
+
+### Descarga de facturas generadas
+
+Cuando `INVOICE_SERVER_HOST` está configurado (o se pasa `serverHost` como input al tool), la respuesta de `emit_invoice` incluye el campo `issued` con una `downloadUrl` por cada factura emitida exitosamente:
+
+```json
+{
+  "successCount": 1,
+  "issued": [
+    {
+      "name": "Juan Perez",
+      "artifactPath": "invoices/factura-202603-juan-perez-1-3f9a.pdf",
+      "downloadUrl": "http://localhost:8876/public/invoices/factura-202603-juan-perez-1-3f9a.pdf"
+    }
+  ]
+}
+```
+
+El servidor HTTP que sirve los PDFs arranca automáticamente en el primer `emit_invoice` que tenga `serverHost` configurado.
+
 ### Inputs de `emit_invoice`
 
 Requeridos:
@@ -100,6 +187,7 @@ Opcionales:
 - `saveSummaryPath`, `summaryFormat`, `summaryFailedOnly`
 - `currency`, `globalConcept`, `addMonthToConcept`
 - `now`, `debug`
+- `serverHost`: URL base del servidor (ej. `http://localhost`). Toma precedencia sobre `INVOICE_SERVER_HOST`.
 
 Precedencia de credenciales:
 

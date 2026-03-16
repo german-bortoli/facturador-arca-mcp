@@ -1,5 +1,6 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
   CallToolRequestSchema,
   ErrorCode,
@@ -7,6 +8,7 @@ import {
   McpError,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { dryRunCsv } from './tools/dry-run';
 import { emitInvoice } from './tools/emit-invoices';
 import { validateCredentialsSource } from './tools/validate-credentials';
@@ -124,6 +126,13 @@ const tools: Tool[] = [
           type: 'boolean',
           description: 'Keep issuer flow in debug mode (no final issue submission).',
         },
+        serverHost: {
+          type: 'string',
+          description:
+            'Base URL of this server without port, e.g. "http://localhost". ' +
+            'When provided (or set via INVOICE_SERVER_HOST env var), each successfully issued invoice ' +
+            'will include a downloadUrl pointing to the embedded HTTP file server.',
+        },
       },
       required: ['invoiceCsvText'],
       additionalProperties: false,
@@ -182,51 +191,109 @@ const tools: Tool[] = [
   },
 ];
 
-const server = new Server(
-  { name: 'facturador-mcp', version: '1.0.0' },
-  { capabilities: { tools: {} } },
-);
+function createMcpServer(): Server {
+  const s = new Server(
+    { name: 'facturador-mcp', version: '1.0.0' },
+    { capabilities: { tools: {} } },
+  );
 
-server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return { tools };
-});
+  s.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name } = request.params;
-  const rawArgs = (request.params.arguments ?? {}) as Record<string, unknown>;
+  s.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const { name } = request.params;
+    const rawArgs = (request.params.arguments ?? {}) as Record<string, unknown>;
 
-  if (name === 'emit_invoice') {
-    const result = await emitInvoice(
-      rawArgs as unknown as EmitInvoiceInput,
-    );
-    return {
-      content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+    if (name === 'emit_invoice') {
+      const result = await emitInvoice(rawArgs as unknown as EmitInvoiceInput);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    }
+    if (name === 'dry_run_csv') {
+      const result = dryRunCsv(rawArgs as unknown as DryRunCsvInput);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    }
+    if (name === 'validate_credentials_source') {
+      const result = await validateCredentialsSource(rawArgs as unknown as ValidateCredentialsSourceInput);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    }
+
+    throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
+  });
+
+  return s;
+}
+
+async function startStreamableHttpTransport(port: number): Promise<void> {
+  const transports = new Map<string, StreamableHTTPServerTransport>();
+
+  async function handleMcp(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const sessionId = req.headers['mcp-session-id'] as string | undefined;
+
+    if (sessionId && transports.has(sessionId)) {
+      await transports.get(sessionId)!.handleRequest(req, res);
+      return;
+    }
+
+    if (req.method !== 'POST') {
+      res.writeHead(405, { 'Content-Type': 'text/plain' });
+      res.end('Method not allowed');
+      return;
+    }
+
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => crypto.randomUUID(),
+    });
+
+    transport.onclose = () => {
+      if (transport.sessionId) transports.delete(transport.sessionId);
     };
+
+    const s = createMcpServer();
+    await s.connect(transport);
+    await transport.handleRequest(req, res);
+
+    if (transport.sessionId) {
+      transports.set(transport.sessionId, transport);
+    }
   }
 
-  if (name === 'dry_run_csv') {
-    const result = dryRunCsv(rawArgs as unknown as DryRunCsvInput);
-    return {
-      content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
-    };
-  }
+  const httpServer = createServer((req, res) => {
+    const url = req.url ?? '';
+    if (url === '/mcp' || url === '/') {
+      handleMcp(req, res).catch((err) => {
+        console.error('[mcp-http] Error:', err);
+        if (!res.headersSent) {
+          res.writeHead(500, { 'Content-Type': 'text/plain' });
+          res.end('Internal server error');
+        }
+      });
+      return;
+    }
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('Not found');
+  });
 
-  if (name === 'validate_credentials_source') {
-    const result = await validateCredentialsSource(
-      rawArgs as unknown as ValidateCredentialsSourceInput,
-    );
-    return {
-      content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
-    };
-  }
-
-  throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
-});
+  await new Promise<void>((resolve, reject) => {
+    httpServer.listen(port, () => {
+      console.error(`[mcp-http] Streamable HTTP transport listening on http://localhost:${port}/mcp`);
+      resolve();
+    });
+    httpServer.on('error', reject);
+  });
+}
 
 async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error('facturador-mcp server running');
+  const stdioServer = createMcpServer();
+  const stdioTransport = new StdioServerTransport();
+  await stdioServer.connect(stdioTransport);
+  console.error('facturador-mcp server running (stdio)');
+
+  const mcpPort = process.env.INVOICE_MCP_SERVER_PORT
+    ? Number(process.env.INVOICE_MCP_SERVER_PORT)
+    : undefined;
+
+  if (mcpPort) {
+    await startStreamableHttpTransport(mcpPort);
+  }
 }
 
 main().catch((error) => {

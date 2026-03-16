@@ -59,6 +59,7 @@ MCP Invoice Workflow
 - [ ] Run dry_run_csv first
 - [ ] If valid rows exist and user confirms, run emit_invoice
 - [ ] Return structured result (success, failed, tracePath)
+- [ ] If issued[].downloadUrl is present, render download links
 ```
 
 ### 1) Validate credentials source
@@ -125,6 +126,14 @@ Call `emit_invoice` with:
 }
 ```
 
+Include `serverHost` if the HTTP file server is configured (see env vars), so the response includes `downloadUrl` per invoice:
+
+```json
+{
+  "serverHost": "http://localhost"
+}
+```
+
 ### 5) Report result
 
 Always report:
@@ -133,6 +142,18 @@ Always report:
 - `successCount` / `failedCount`
 - `failed` details (if any)
 - `tracePath` (if present)
+- `issued` list with download links (if `downloadUrl` is present)
+
+#### Handling download URLs
+
+When `emit_invoice` returns an `issued` array, each entry may contain a `downloadUrl`. If present, render each one as a clickable markdown link so the user can download the generated PDF directly:
+
+```
+✅ Factura emitida para **Juan Perez**
+[Descargar factura](http://localhost:8876/public/invoices/factura-202603-juan-perez-1-3f9a.pdf)
+```
+
+If `downloadUrl` is absent (server not configured), still report `artifactPath` so the user knows where the file was saved locally.
 
 ## Safety Rules
 
