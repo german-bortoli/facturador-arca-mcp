@@ -21,6 +21,10 @@ npm install
 npx playwright install
 ```
 
+## Referencia de Skill
+
+Como referencia de operación OpenClaw + MCP en este proyecto, ver `SKILL.md`.
+
 ## Contratos CSV
 
 Este repositorio utiliza un único contrato CSV para CLI y MCP:
