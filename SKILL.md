@@ -145,3 +145,28 @@ Always report:
 
 - For DNI flows, AFIP UI may force IVA receiver condition to Consumidor Final.
 - For Monotributo/RI flows, prefer `TIPO_DOC=CUIT` and use `CONDICION_IVA_RECEPTOR` accordingly.
+
+## IVA Receiver Condition Codes (`CONDICION_IVA_RECEPTOR`)
+
+Accepted aliases for this header:
+
+- `CONDICION_IVA_RECEPTOR` (recommended)
+- `CONDICIONIVA`
+- `IVA_RECEPTOR`
+- `IVA_RECEIVER` (backward compatibility)
+
+Supported codes:
+
+| Code | IVA condition label |
+|---|---|
+| `1` | Responsable inscripto |
+| `4` | Sujeto exento |
+| `5` | Consumidor final |
+| `6` | Responsable monotributo |
+| `7` | Sujeto no categorizado |
+| `8` | Proveedor exterior |
+| `9` | Cliente exterior |
+| `10` | IVA liberado Ley 19640 |
+| `13` | Monotributista social |
+| `15` | IVA no alcanzado |
+| `16` | Monotributo trabajador independiente promovido |
