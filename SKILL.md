@@ -70,7 +70,7 @@ When the user provides a PDF or image instead of a CSV, extract the fields by re
 | `SERVICIOS` | Monetary amount of the service item. Usually the subtotal of the service line. |
 | `FORMA_DE_PAGO` | Payment condition printed as "Condición de venta" (e.g. `Transferencia Bancaria`, `Contado`). |
 | `TOTAL` | "Importe Total" — the grand total amount. |
-| `PAGADOR` | "Apellido y Nombre / Razón Social" of the receiver/client (e.g. `RODRIGUEZ VERONICA MARIA`, `MULTEO SRL`). |
+| `PAGADOR` | "Apellido y Nombre / Razón Social" of the receiver/client (e.g. `PEREZ JUAN`, `EMPRESA COPADA SRL`). |
 | `TIPO_DOC` | Document type of the receiver. Use `CUIT` when a CUIT is shown. Use `DNI` only when only a DNI is shown. |
 | `DOCUMENTO` | The CUIT or DNI number of the receiver. Found after "CUIT:" in the receiver section. |
 | `DIRECCION` | Receiver's address. Found as "Domicilio" in the receiver section. |
