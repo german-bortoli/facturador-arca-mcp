@@ -1,2 +1,2 @@
-MES,Comprobante,N° Comp,FECHA ,MATRICULA,HOSPEDAJE,SERVICIOS,TOTAL,PAGADOR,RESIDENTE,Tipo doc,Documento,DIRECCION
-ABRIL,FACTURA,00001-00000001,30,,20000,,20000,Example Payer one,Guest name,DNI,12345678,Av. siempreviva 123 - Springfield
+MES,Comprobante,N° Comp,FECHA,CONCEPTO,MATRICULA,HOSPEDAJE,SERVICIOS,METODO_PAGO,TOTAL,PAGADOR,RESIDENTE,Tipo doc,Documento,DIRECCION
+ABRIL,Factura C,00001-00000001,12/03/2026,Servicio de programacion de software,,150,,Otros,150,Cliente Demo SA,servicio de programacion de software,DNI,30111222,"Calle Falsa 123, Ciudad Demo, Provincia Demo"

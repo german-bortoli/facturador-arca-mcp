@@ -2,41 +2,22 @@ import { invariant } from '@epic-web/invariant';
 import type { ParseXlsxOptions, ParseCsvOptions } from '../types/file';
 import { parse } from 'csv-parse/sync';
 import * as XLSX from 'xlsx';
-import mime from 'mime-types';
+import { readFile } from 'node:fs/promises';
+import { extname } from 'node:path';
 import z from 'zod';
 
 export class FileParser {
-  private allowedExtensions = ['csv', 'xlsx'].map(e => mime.lookup(e));
-  /**
-   * Reads a file and returns its content based on the specified format
-   */
-  private async readFile<T extends Record<string, unknown>>(f: Bun.BunFile, config: { as: 'json' }): Promise<T>;
-  private async readFile(f: Bun.BunFile, config: { as: 'text' }): Promise<string>;
-  private async readFile(f: Bun.BunFile, config?: { as: 'arrayBuffer' }): Promise<ArrayBuffer>;
-  private async readFile<T extends Record<string, unknown>>(
-    f: Bun.BunFile,
-    { as }: { as: 'text' | 'json' | 'arrayBuffer' } = { as: 'arrayBuffer' }
-  ): Promise<T | string | ArrayBuffer> {
-    if (as === 'text') {
-      return f.text();
-    }
-    if (as === 'json') {
-      return f.json() as Promise<T>;
-    }
-    if (as === 'arrayBuffer') {
-      return f.arrayBuffer();
-    }
-    throw new Error('Invalid format specified');
-  }
+  private allowedExtensions = ['.csv', '.xlsx'];
 
-  private validateFileExtension(file: Bun.BunFile) {
-    invariant(file, 'File not provided');
-    invariant(this.allowedExtensions.includes(file.type), 'Invalid file extension');
-    return file;
+  private validateFileExtension(filePath: string): '.csv' | '.xlsx' {
+    invariant(filePath, 'File not provided');
+    const extension = extname(filePath).toLowerCase();
+    invariant(this.allowedExtensions.includes(extension), 'Invalid file extension');
+    return extension as '.csv' | '.xlsx';
   }
 
 
-  private async parseCsv(buffer: ArrayBuffer, options?: ParseCsvOptions) {
+  private async parseCsv(buffer: ArrayBufferLike, options?: ParseCsvOptions) {
     const {
       headerRow = true,
       includeEmptyRows = false,
@@ -103,7 +84,7 @@ export class FileParser {
     return jsonData;
   }
 
-  private async parseXlsx(buffer: ArrayBuffer, options?: ParseXlsxOptions) {
+  private async parseXlsx(buffer: ArrayBufferLike, options?: ParseXlsxOptions) {
 
     const {
       sheetName,
@@ -217,27 +198,30 @@ export class FileParser {
    * @returns Validated and typed data when schema is provided, raw data otherwise
    */
   async parse<T>(filePath: string, opts: { csv?: ParseCsvOptions, xlsx?: ParseXlsxOptions, schema: z.ZodSchema<T>, filterInvalid?: boolean }): Promise<{ valid: T[], invalid: unknown[] }>;
-  async parse(filePath: string, opts?: { csv?: ParseCsvOptions, xlsx?: ParseXlsxOptions }): Promise<{ valid: Record<string, unknown>[][], invalid: unknown[] }>;
+  async parse(filePath: string, opts?: { csv?: ParseCsvOptions, xlsx?: ParseXlsxOptions }): Promise<{ valid: Record<string, unknown>[] | unknown[][], invalid: unknown[] }>;
   async parse<T>(filePath: string, opts?: { csv?: ParseCsvOptions, xlsx?: ParseXlsxOptions, schema?: z.ZodSchema<T>, filterInvalid?: boolean }): Promise<{ valid: T[] | Record<string, unknown>[] | unknown[][], invalid: unknown[] }> {
-    const file = Bun.file(filePath);
-    this.validateFileExtension(file);
-    const f = await this.readFile(file);
+    const extension = this.validateFileExtension(filePath);
+    const fileBuffer = await readFile(filePath);
+    const buffer = fileBuffer.buffer.slice(
+      fileBuffer.byteOffset,
+      fileBuffer.byteOffset + fileBuffer.byteLength,
+    );
 
     let rows: { valid: T[] | Record<string, unknown>[] | unknown[][], invalid: unknown[] } = { valid: [], invalid: [] };
 
-    switch (mime.extension(file.type)) {
-      case 'csv':
+    switch (extension) {
+      case '.csv':
         if (opts?.schema) {
-          rows = this.filterValidRows(await this.parseCsv(f, opts?.csv), opts.schema);
+          rows = this.filterValidRows(await this.parseCsv(buffer, opts?.csv), opts.schema);
         } else {
-          rows = { valid: await this.parseCsv(f, opts?.csv), invalid: [] };
+          rows = { valid: await this.parseCsv(buffer, opts?.csv), invalid: [] };
         }
         break;
-      case 'xlsx':
+      case '.xlsx':
         if (opts?.schema) {
-          rows = this.filterValidRows(await this.parseXlsx(f, opts?.xlsx), opts.schema);
+          rows = this.filterValidRows(await this.parseXlsx(buffer, opts?.xlsx), opts.schema);
         } else {
-          rows = { valid: await this.parseXlsx(f, opts?.xlsx), invalid: [] };
+          rows = { valid: await this.parseXlsx(buffer, opts?.xlsx), invalid: [] };
         }
         break;
       default:
@@ -247,8 +231,3 @@ export class FileParser {
     return rows;
   }
 }
-
-// Read the file
-// get the file extension,, throw for non csv or xlsx
-// if its a xlsx, use first sheet if no sheet is specificed on read file.
-// parse the file and return a json with types

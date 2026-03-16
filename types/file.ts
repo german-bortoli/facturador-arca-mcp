@@ -40,6 +40,20 @@ export interface ParseCsvOptions {
   headerMapping?: Record<string, string>;
 }
 
+function parseOptionalDate(value: string | null | undefined): Date | undefined {
+  if (!value) return undefined;
+  const raw = value.trim();
+  if (!raw) return undefined;
+
+  const ddmmyyyy = DateTime.fromFormat(raw, 'dd/MM/yyyy');
+  if (ddmmyyyy.isValid) return ddmmyyyy.toJSDate();
+
+  const iso = DateTime.fromFormat(raw, 'yyyy-MM-dd');
+  if (iso.isValid) return iso.toJSDate();
+
+  return undefined;
+}
+
 
 export const ColumnsSchema = z.object({
   NOMBRE: z.string(),
@@ -49,15 +63,17 @@ export const ColumnsSchema = z.object({
   NUMERO: z.string().transform(val => cleanDocumentNumber(val)),
   CONCEPTO: z.string(),
   COD: z.string().nullish(),
+  METODO_PAGO: z.string().nullish(), // Optional: payment method label/value (default in UI flow: "Otros")
   TOTAL: z.string().transform((val) => parseAmount(val)),
+  FECHA_EMISION: z.string().nullish(), // Optional: Invoice issue date in DD/MM/YYYY format
   FACTURA_TIPO: z.string().nullish(), // Optional: "A" | "B" | "C" (default: "C")
   IVA_GRAVADO: z.string().nullish().transform(val => val ? Number(val) : undefined), // Optional: percentage (default: 100)
   IVA_EXCEMPT: z.string().nullish().transform(val => val ? Number(val) : undefined), // Optional: percentage (default: 0)
   IVA_PERCENTAGE: z.string().nullish().transform(val => val ? Number(val) : undefined), // Optional: tax rate (default: 21)
   IVA_RECEIVER: z.string().nullish().transform(val => val ? Number(val) : undefined), // Optional: condition code 1-16 (default: 6)
-  FECHA_SERVICIO_DESDE: z.string().nullish().transform(val => val ? DateTime.fromFormat(val, 'dd/MM/yyyy').toJSDate() : undefined), // Optional: Service period start date (DD/MM/YYYY or YYYY-MM-DD)
-  FECHA_SERVICIO_HASTA: z.string().nullish().transform(val => val ? DateTime.fromFormat(val, 'dd/MM/yyyy').toJSDate() : undefined), // Optional: Service period end date (DD/MM/YYYY or YYYY-MM-DD)
-  FECHA_VTO_PAGO: z.string().nullish().transform(val => val ? DateTime.fromFormat(val, 'dd/MM/yyyy').toJSDate() : undefined), // Optional: Payment due date (DD/MM/YYYY or YYYY-MM-DD)
+  FECHA_SERVICIO_DESDE: z.string().nullish().transform(parseOptionalDate), // Optional: Service period start date (DD/MM/YYYY or YYYY-MM-DD)
+  FECHA_SERVICIO_HASTA: z.string().nullish().transform(parseOptionalDate), // Optional: Service period end date (DD/MM/YYYY or YYYY-MM-DD)
+  FECHA_VTO_PAGO: z.string().nullish().transform(parseOptionalDate), // Optional: Payment due date (DD/MM/YYYY or YYYY-MM-DD)
 }).strict();
 
 /** Column names in schema definition order (for CSV/XLSX output). */

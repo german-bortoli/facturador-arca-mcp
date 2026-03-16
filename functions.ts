@@ -3,18 +3,9 @@ import type { Expense } from './interfaces';
 import { DateTime } from 'luxon';
 
 const LOGIN_SUFFIX = '/contribuyente_/login.xhtml?action=SYSTEM&system=admin_mono';
-const USERNAME = process.env.AFIP_USERNAME!;
-const PASSWORD = process.env.AFIP_PASSWORD!;
-const CUIT_USR_FACTURADOR = process.env.AFIP_ISSUER_CUIT!;
 const BASE_URL = 'https://auth.afip.gob.ar/';
 const PORTAL_MONOTRIBUTO_URL = 'https://monotributo.afip.gob.ar/app/Inicio.aspx';
 const PORTAL_GENERAL_URL = 'https://portalcf.cloud.afip.gob.ar/portal/app/';
-
-if (!USERNAME || !PASSWORD || !CUIT_USR_FACTURADOR) {
-  throw new Error(
-    'Username, password and facturador are mandatory, check your env vars'
-  );
-}
 
 export const addExpensesDataToInvoice = async (
   page: Page,
@@ -64,7 +55,8 @@ export const startNewInvoice = async (page: Page) => {
   if (
     !(await page.url().includes(ptosVtasPage))
   ) {
-    page.goto(ptosVtasPage);
+    await page.goto(ptosVtasPage);
+    await page.waitForLoadState('domcontentloaded');
   }
 };
 
@@ -72,6 +64,12 @@ export const sleep = async (page: Page, millis: number) =>
   await page.waitForTimeout(millis || 1000);
 
 export const logInUser = async (page: Page) => {
+  const username = process.env.AFIP_USERNAME;
+  const password = process.env.AFIP_PASSWORD;
+  if (!username || !password) {
+    throw new Error('AFIP_USERNAME and AFIP_PASSWORD are required');
+  }
+
   const url = await page.url();
   if (
     [PORTAL_MONOTRIBUTO_URL,
@@ -80,18 +78,18 @@ export const logInUser = async (page: Page) => {
       .some(loggedUrl => url.includes(loggedUrl))
   ) {
     // Here user should be authed so return;
-    Promise.resolve();
+    return;
   }
   const loginInput = page.locator('input[id="F1:username"]');
   await loginInput.waitFor();
-  await loginInput.fill(USERNAME);
+  await loginInput.fill(username);
   const submitInput = page.locator('input[id="F1:btnSiguiente"]');
 
   await Promise.all([page.waitForNavigation(), submitInput.click()]);
 
   const passwordInput = await page.locator('input[name="F1\\:password"]');
   await passwordInput.waitFor();
-  await passwordInput.fill(PASSWORD);
+  await passwordInput.fill(password);
 
   await Promise.all([
     page.waitForNavigation({ waitUntil: 'networkidle' }),
@@ -100,6 +98,11 @@ export const logInUser = async (page: Page) => {
 };
 
 export const navigateToFacturadorPage = async (page: Page, originUrl = BASE_URL + LOGIN_SUFFIX) => {
+  const issuerCuit = process.env.AFIP_ISSUER_CUIT;
+  if (!issuerCuit) {
+    throw new Error('AFIP_ISSUER_CUIT is required');
+  }
+
   await page.goto(originUrl);
   await page.waitForLoadState('networkidle');
   const pageTitle = await page.title();
@@ -125,7 +128,7 @@ export const navigateToFacturadorPage = async (page: Page, originUrl = BASE_URL 
     const url = await portalMonotributoPage.url();
     if (url.includes('https://monotributo.afip.gob.ar/app/SelecRepresentado.aspx')) {
       await portalMonotributoPage
-        .locator(`//a[@usr="${CUIT_USR_FACTURADOR}"]`)
+        .locator(`//a[@usr="${issuerCuit}"]`)
         .click();
     }
   }

@@ -1,8 +1,10 @@
-import type { Page } from 'playwright';
+import type { Locator, Page } from 'playwright';
 import type { Columns } from './types/file';
 import { COLUMNS_ORDER } from './types/file';
 import { DateTime, Duration } from 'luxon';
 import * as XLSX from 'xlsx';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import {
   sleep,
   addAccomodationDataToInvoice,
@@ -16,6 +18,12 @@ import {
 } from './functions';
 import { mapInvoiceData } from './mappers/invoice-mapper';
 import { DOCUMENT_TYPES } from './types/invoice';
+
+interface SelectOptionItem {
+  index: number;
+  value: string;
+  text: string;
+}
 
 export interface SaveSummaryOptions {
   /** Output format. Default: 'csv'. */
@@ -52,6 +60,25 @@ function columnsToSerializable(row: Columns): Record<string, string> {
 function escapeCsvField(value: string): string {
   if (!/[\n",]/.test(value)) return value;
   return `"${value.replace(/"/g, '""')}"`;
+}
+
+function sanitizePathSegment(value: string): string {
+  return value
+    .trim()
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+    .replace(/\s+/g, ' ')
+    .slice(0, 120);
+}
+
+function classifyFailureCode(error: string): string {
+  const normalized = error.toLowerCase();
+  if (normalized.includes('timeout')) return 'TIMEOUT';
+  if (normalized.includes('domicilio')) return 'RECEIVER_ADDRESS';
+  if (normalized.includes('puntodeventa')) return 'POINT_OF_SALE';
+  if (normalized.includes('idtipodocreceptor') || normalized.includes('document type')) return 'DOCUMENT_TYPE';
+  if (normalized.includes('comprobante')) return 'INVOICE_TYPE';
+  if (normalized.includes('total values')) return 'TOTAL_MISMATCH';
+  return 'UNKNOWN';
 }
 
 //TODO: check why this was used
@@ -97,6 +124,9 @@ export interface InvoiceRunResult {
   error?: string;
   isTimeout?: boolean;
   duration: number;
+  failureCode?: string;
+  artifactPath?: string;
+  issuedDate?: `${string}/${string}/${string}`;
 }
 
 export interface InvoiceIssuerOptions {
@@ -201,7 +231,7 @@ export class InvoiceIssuer {
    * @param opts - Format, which rows to include, and output path.
    * @returns The path of the written file (or the first path if two files written).
    */
-  saveSummaryToFile(opts: SaveSummaryOptions = {}): string {
+  async saveSummaryToFile(opts: SaveSummaryOptions = {}): Promise<string> {
     const format = opts.format ?? 'csv';
     const includeSuccess = opts.includeSuccess ?? false;
     const includeFailed = opts.includeFailed ?? true;
@@ -247,7 +277,8 @@ export class InvoiceIssuer {
         headers.map((h) => escapeCsvField(row[h] ?? '')).join(','),
       );
       const csv = [headerLine, ...dataLines].join('\n');
-      Bun.write(pathWithExt, csv, { createPath: true });
+      await mkdir(dirname(pathWithExt), { recursive: true });
+      await writeFile(pathWithExt, csv, 'utf8');
     } else {
       const worksheet = XLSX.utils.json_to_sheet(serialized, {
         header: headers as string[],
@@ -257,7 +288,35 @@ export class InvoiceIssuer {
       XLSX.writeFile(workbook, pathWithExt, { bookType: 'xlsx' });
     }
 
-    console.debug(`Summary written to ${pathWithExt} (${rowsToWrite.length} rows)`);
+    const metadataPath = `${pathWithExt.replace(/\.[^.]+$/, '')}.meta.json`;
+    const metadata = {
+      generatedAt: DateTime.now().toISO(),
+      summaryPath: pathWithExt,
+      format,
+      includeSuccess,
+      includeFailed,
+      totals: {
+        total: this.results.length,
+        success: successResults.length,
+        failed: failedResults.length,
+      },
+      rows: this.results.map((result) => ({
+        index: result.index,
+        status: result.status,
+        name: result.invoice.NOMBRE,
+        document: result.invoice.NUMERO,
+        total: result.invoice.TOTAL,
+        durationMs: result.duration,
+        error: result.error,
+        failureCode: result.failureCode,
+        isTimeout: result.isTimeout ?? false,
+        artifactPath: result.artifactPath,
+        issuedDate: result.issuedDate,
+      })),
+    };
+    await writeFile(metadataPath, JSON.stringify(metadata, null, 2), 'utf8');
+
+    console.debug(`Summary written to ${pathWithExt} (${rowsToWrite.length} rows), metadata: ${metadataPath}`);
     return pathWithExt;
   }
 
@@ -272,7 +331,7 @@ export class InvoiceIssuer {
     );
 
     try {
-      await Promise.race([
+      const issueDetails = await Promise.race([
         this.issueInvoice(inv, index, timeout),
         timeout.promise,
       ]);
@@ -282,18 +341,22 @@ export class InvoiceIssuer {
         index,
         status: 'success',
         duration: Date.now() - start,
+        artifactPath: issueDetails.artifactPath,
+        issuedDate: issueDetails.issuedDate,
       };
     } catch (e) {
       timeout.disarm();
       const isTimeout =
         e instanceof Error && e.message.startsWith('Timeout:');
+      const errorMessage = e instanceof Error ? e.message : 'Unknown error';
       console.error(`❌ Invoice failed: ${inv.NOMBRE}`, e);
       return {
         invoice: inv,
         index,
         status: 'failed',
-        error: e instanceof Error ? e.message : 'Unknown error',
+        error: errorMessage,
         isTimeout,
+        failureCode: classifyFailureCode(errorMessage),
         duration: Date.now() - start,
       };
     }
@@ -312,17 +375,18 @@ export class InvoiceIssuer {
     inv: Columns,
     index: number,
     timeout: CancellableTimeout,
-  ): Promise<void> {
+  ): Promise<{ artifactPath: string; issuedDate: `${string}/${string}/${string}` }> {
     const start = performance.now();
     await sleep(this.page, 1000);
     console.debug(`[${index}] ⏳ Issuing ${inv.NOMBRE} invoice for ${inv.TOTAL} ...`);
     await startNewInvoice(this.page);
 
-    await this.page.locator('select[name="puntoDeVenta"]').selectOption('1');
+    await this.selectPointOfSale();
+    await this.selectInvoiceType(inv.FACTURA_TIPO);
     await this.page.locator('text=Continuar >').click();
 
     const today = DateTime.now();
-    const date = this.getInvoicingDate();
+    const date = this.resolveInvoiceDate(inv.FECHA_EMISION as string | undefined);
     const dateInput = this.page.locator(
       'input[name="fechaEmisionComprobante"]',
     );
@@ -332,6 +396,8 @@ export class InvoiceIssuer {
     await this.page
       .locator('select[name="idConcepto"]')
       .selectOption('2'); // Servicios
+
+    await this.selectAssociatedActivityIfPresent();
 
     const fromDateInput = this.page.locator(
       'input[name="periodoFacturadoDesde"]',
@@ -353,10 +419,6 @@ export class InvoiceIssuer {
 
     await this.page.locator('text=Continuar >').click();
 
-    await this.page
-      .locator('select[name="idIVAReceptor"]')
-      .selectOption('5'); // Consumidor final
-
     const { invoiceData } = mapInvoiceData(inv);
     const documentType = invoiceData.DocTipo;
     if (!documentType) {
@@ -365,35 +427,36 @@ export class InvoiceIssuer {
       );
     }
 
-    await this.page
-      .locator('select[name="idTipoDocReceptor"]')
-      .selectOption(documentType.toString());
-    await this.page.locator('input[name="nroDocReceptor"]').fill(inv.NUMERO);
+    const ivaReceiverSelect = this.page.locator('select[name="idIVAReceptor"]');
+    await ivaReceiverSelect.waitFor({ state: 'visible' });
+    const ivaOptions = await this.waitForSelectableOptions(ivaReceiverSelect);
+    // AFIP usually requires "Consumidor final" when customer document type is DNI.
+    const requestedIva = documentType === DOCUMENT_TYPES.DNI
+      ? '5'
+      : String(invoiceData.CondicionIVAReceptorId);
+    const matchedIva = ivaOptions.find((option) => option.value === requestedIva);
+    if (matchedIva) {
+      await ivaReceiverSelect.selectOption({ index: matchedIva.index });
+    } else {
+      await ivaReceiverSelect.selectOption({ index: ivaOptions[0]!.index });
+    }
 
-    const addressInput = this.page.locator('input[name="domicilioReceptor"]');
+    await this.selectReceiverDocumentType(documentType, inv.TIPO_DOCUMENTO);
+    const receiverDocInput = this.page.locator('input[name="nroDocReceptor"]').first();
+    await receiverDocInput.fill(inv.NUMERO);
+    await this.triggerReceiverDocumentBlur(receiverDocInput);
 
     if (documentType === DOCUMENT_TYPES.DNI) {
       await this.page
         .locator('input[name="razonSocialReceptor"]')
         .fill(inv.NOMBRE);
-      await addressInput.fill(inv.CONCEPTO);
-    } else {
-      await this.page.waitForLoadState('networkidle');
-      const currentValue = await addressInput.inputValue();
-      const isEditable = await addressInput.isEditable();
-      if (!currentValue && isEditable) {
-        if (inv.DOMICILIO) {
-          await addressInput.fill(inv.DOMICILIO);
-        } else {
-          throw new Error(`DOMICILIO is required for ${inv.NOMBRE}`);
-        }
-      }
     }
+    await this.fillReceiverAddress(documentType, inv);
 
     // check if this works to await the page to be ready
     await sleep(this.page, 200);
 
-    await this.page.locator('#formadepago4').check();
+    await this.selectPaymentMethod(inv.METODO_PAGO);
     await this.page.locator('text=Continuar >').click();
 
     const description = getInvoiceDescription(inv.CONCEPTO, date);
@@ -421,7 +484,10 @@ export class InvoiceIssuer {
       const end = performance.now();
       console.debug(`[${index}] Invoice not issued due to DEBUG mode: ${inv.NOMBRE} in${DateTime.fromMillis(end - start).toFormat('ss.SSS')} seconds `);
       await sleep(this.page, 10_000);
-      return;
+      return {
+        artifactPath: '',
+        issuedDate: date,
+      };
     }
 
     // Point of no return: disarm timeout so server-side issuance is not interrupted
@@ -450,13 +516,371 @@ export class InvoiceIssuer {
       this.page.waitForEvent('download'),
       this.page.locator('text=Imprimir...').click(),
     ]);
-    await download.saveAs(
-      `invoices/factura-${today.year}${today.month}-${inv.NOMBRE}-${index}.pdf`,
-    );
+    const safeName = sanitizePathSegment(inv.NOMBRE || `invoice-${index}`);
+    const outputPdfPath = `invoices/factura-${today.year}${String(today.month).padStart(2, '0')}-${safeName}-${index}.pdf`;
+    await download.saveAs(outputPdfPath);
     await download.delete();
 
     await this.page.locator('text=Menú Principal').click();
     const end = performance.now();
     console.debug(`[${index}] ✅ Invoice issued successfully: ${inv.NOMBRE} in ${DateTime.fromMillis(end - start).toFormat('ss.SSS')} seconds `);
+    return {
+      artifactPath: outputPdfPath,
+      issuedDate: date,
+    };
+  }
+
+  private resolveInvoiceDate(
+    csvIssueDate?: string | null,
+  ): `${string}/${string}/${string}` {
+    const raw = csvIssueDate?.trim();
+    if (raw) {
+      const parsed = DateTime.fromFormat(raw, 'dd/MM/yyyy');
+      if (parsed.isValid) {
+        return parsed.toFormat('dd/MM/yyyy') as `${string}/${string}/${string}`;
+      }
+    }
+
+    return this.getInvoicingDate();
+  }
+
+  private async selectPointOfSale(): Promise<void> {
+    const pointOfSaleSelect = this.page.locator('select[name="puntoDeVenta"]');
+    await pointOfSaleSelect.waitFor({ state: 'visible' });
+    const selectableOptions = await this.waitForSelectableOptions(pointOfSaleSelect);
+
+    const requestedPointOfSale = process.env.POINT_OF_SALE?.trim();
+    if (!requestedPointOfSale || requestedPointOfSale === '1') {
+      await pointOfSaleSelect.selectOption({ index: selectableOptions[0]!.index });
+      return;
+    }
+
+    const matchedOption = selectableOptions.find(
+      (option) => option.value === requestedPointOfSale,
+    );
+    if (!matchedOption) {
+      throw new Error(
+        `Requested puntoDeVenta "${requestedPointOfSale}" was not found. Available options: ${selectableOptions.map((option) => option.value).join(', ')}`,
+      );
+    }
+
+    await pointOfSaleSelect.selectOption({ index: matchedOption.index });
+  }
+
+  private async selectInvoiceType(
+    invoiceType?: string | null,
+  ): Promise<void> {
+    const candidates = [
+      'select[name="universoComprobante"]',
+      'select[name="tipoComprobante"]',
+      'select#universoComprobante',
+      'select#tipoComprobante',
+    ];
+
+    let selectLocator: Locator | null = null;
+    for (const selector of candidates) {
+      const locator = this.page.locator(selector);
+      if ((await locator.count()) > 0) {
+        selectLocator = locator.first();
+        break;
+      }
+    }
+
+    if (!selectLocator) {
+      return;
+    }
+
+    await selectLocator.waitFor({ state: 'visible' });
+    const selectableOptions = await this.waitForSelectableOptions(selectLocator);
+
+    if (!invoiceType) {
+      await selectLocator.selectOption({ index: selectableOptions[0]!.index });
+      return;
+    }
+
+    const normalizedInvoiceType = invoiceType.trim().toUpperCase();
+    const matchedOption = selectableOptions.find((option) => {
+      const normalizedText = option.text
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toUpperCase();
+      return normalizedText.includes(`FACTURA ${normalizedInvoiceType}`);
+    });
+
+    if (!matchedOption) {
+      throw new Error(
+        `Requested comprobante type "${invoiceType}" was not found. Available options: ${selectableOptions.map((option) => option.text).join(', ')}`,
+      );
+    }
+
+    await selectLocator.selectOption({ index: matchedOption.index });
+  }
+
+  private async selectAssociatedActivityIfPresent(): Promise<void> {
+    const candidates = [
+      'select[name="actiAsociadaId"]',
+      'select[name="idActividadAsociada"]',
+      'select[name="idActividad"]',
+      'select#actiAsociadaId',
+      'select#idActividadAsociada',
+      'select#idActividad',
+    ];
+
+    let activitySelect: Locator | null = null;
+    for (const selector of candidates) {
+      const locator = this.page.locator(selector);
+      if ((await locator.count()) > 0) {
+        activitySelect = locator.first();
+        break;
+      }
+    }
+    if (!activitySelect) {
+      return;
+    }
+
+    try {
+      await activitySelect.waitFor({ state: 'visible', timeout: 5000 });
+      const options = await this.waitForSelectableOptions(activitySelect, 10_000);
+      await activitySelect.selectOption({ index: options[0]!.index });
+    } catch {
+      // Activity can be optional or delayed depending on taxpayer profile.
+    }
+  }
+
+  private async selectPaymentMethod(paymentMethodRaw?: string | null): Promise<void> {
+    const desiredRaw = (paymentMethodRaw ?? '').trim();
+    const desired = desiredRaw.length > 0 ? desiredRaw : 'otros';
+    const normalizedDesired = desired
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
+
+    const optionInputs = this.page.locator(
+      'input[id^="formadepago"][type="radio"], input[id^="formadepago"][type="checkbox"], input[name*="forma"][type="radio"], input[name*="forma"][type="checkbox"]',
+    );
+    const optionCount = await optionInputs.count();
+    if (optionCount === 0) {
+      // Legacy fallback used previously in this project.
+      await this.page.locator('#formadepago4').check();
+      return;
+    }
+
+    const options = await optionInputs.evaluateAll((nodes) =>
+      nodes.map((node, index) => {
+        const element = node as {
+          id?: string;
+          name?: string;
+          value?: string;
+          closest?: (selector: string) => { textContent?: string | null } | null;
+          ownerDocument?: {
+            querySelector?: (selector: string) => { textContent?: string | null } | null;
+          };
+        };
+        const id = element.id ?? '';
+        const labelByFor = id && element.ownerDocument?.querySelector
+          ? element.ownerDocument.querySelector(`label[for="${id}"]`)?.textContent ?? ''
+          : '';
+        const closestLabel = element.closest ? element.closest('label')?.textContent ?? '' : '';
+        const rowText = element.closest ? element.closest('tr')?.textContent ?? '' : '';
+
+        return {
+          index,
+          id,
+          name: element.name ?? '',
+          value: element.value ?? '',
+          text: `${labelByFor} ${closestLabel} ${rowText}`.replace(/\s+/g, ' ').trim(),
+        };
+      }),
+    );
+
+    const normalize = (value: string) =>
+      value
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase();
+
+    const isTransfer = normalizedDesired.includes('transfer');
+    const isOther = normalizedDesired.includes('otro');
+
+    let matched = options.find((option) => {
+      const normalizedOption = normalize(`${option.text} ${option.value}`);
+      if (isTransfer) return normalizedOption.includes('transfer');
+      if (isOther) return normalizedOption.includes('otro');
+      return normalizedOption.includes(normalizedDesired);
+    });
+
+    if (!matched) {
+      matched = options.find((option) => normalize(`${option.text} ${option.value}`).includes('otro'));
+    }
+    if (!matched) {
+      matched = options[0];
+    }
+    if (!matched) {
+      throw new Error('No payment method options available in AFIP form');
+    }
+
+    if (matched.id) {
+      await this.page.locator(`#${matched.id}`).check();
+    } else {
+      await optionInputs.nth(matched.index).check();
+    }
+  }
+
+  private async fillReceiverAddress(
+    documentType: number,
+    inv: Columns,
+  ): Promise<void> {
+    const inputCandidates = [
+      'input[name="domicilioReceptor"]',
+      'input[name="domicilio"]',
+      'input[id*="domicilio"]',
+    ];
+    const selectCandidates = [
+      'select[name="domicilioReceptor"]',
+      'select[name="domicilio"]',
+      'select[id*="domicilio"]',
+    ];
+
+    const addressInput = this.page.locator(inputCandidates.join(', ')).first();
+    const addressSelect = this.page.locator(selectCandidates.join(', ')).first();
+    const normalizedAddress = inv.DOMICILIO?.trim();
+
+    if (documentType === DOCUMENT_TYPES.DNI) {
+      if (!normalizedAddress) {
+        throw new Error(`DOMICILIO is required for ${inv.NOMBRE}`);
+      }
+      await addressInput.waitFor({ state: 'visible' });
+      let persisted = false;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        await addressInput.fill('');
+        await addressInput.fill(normalizedAddress);
+        await addressInput.press('Tab');
+        await this.page.waitForTimeout(250);
+        const currentValue = (await addressInput.inputValue()).trim();
+        if (currentValue.length > 0) {
+          persisted = true;
+          break;
+        }
+      }
+      if (!persisted) {
+        throw new Error(`Could not persist DOMICILIO for ${inv.NOMBRE}`);
+      }
+      return;
+    }
+
+    await this.page.waitForLoadState('networkidle');
+
+    if ((await addressSelect.count()) > 0) {
+      const options = await this.waitForSelectableOptions(addressSelect);
+      const currentValue = await addressSelect.inputValue();
+      if (!currentValue) {
+        if (normalizedAddress) {
+          const normalizedExpected = normalizedAddress
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .toUpperCase();
+          const matched = options.find((option) =>
+            option.text
+              .normalize('NFD')
+              .replace(/[\u0300-\u036f]/g, '')
+              .toUpperCase()
+              .includes(normalizedExpected),
+          );
+          if (matched) {
+            await addressSelect.selectOption({ index: matched.index });
+            return;
+          }
+        }
+        await addressSelect.selectOption({ index: options[0]!.index });
+      }
+      return;
+    }
+
+    if ((await addressInput.count()) > 0) {
+      const currentValue = await addressInput.inputValue();
+      const isEditable = await addressInput.isEditable();
+      if (!currentValue && isEditable) {
+        if (!normalizedAddress) {
+          throw new Error(`DOMICILIO is required for ${inv.NOMBRE}`);
+        }
+        await addressInput.fill(normalizedAddress);
+      }
+    }
+  }
+
+  private async selectReceiverDocumentType(
+    documentType: number,
+    documentLabelRaw: string,
+  ): Promise<void> {
+    const documentTypeSelect = this.page.locator('select[name="idTipoDocReceptor"]').first();
+    await documentTypeSelect.waitFor({ state: 'visible' });
+    const options = await this.waitForSelectableOptions(documentTypeSelect, 30_000);
+
+    const requestedValue = String(documentType);
+    const normalizedLabel = documentLabelRaw
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim()
+      .toUpperCase();
+
+    const matched = options.find((option) => {
+      const normalizedOptionText = option.text
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toUpperCase();
+      return option.value === requestedValue || normalizedOptionText.includes(normalizedLabel);
+    });
+
+    if (!matched) {
+      throw new Error(
+        `Receiver document type "${documentLabelRaw}" (${requestedValue}) not available. Options: ${options.map((option) => `${option.value}:${option.text}`).join(', ')}`,
+      );
+    }
+
+    await documentTypeSelect.selectOption({ index: matched.index });
+  }
+
+  private async triggerReceiverDocumentBlur(input: Locator): Promise<void> {
+    await input.evaluate((element) => {
+      const field = element as HTMLInputElement;
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+      field.dispatchEvent(new Event('change', { bubbles: true }));
+      field.blur();
+      field.dispatchEvent(new Event('blur', { bubbles: true }));
+    });
+
+    try {
+      await this.page.waitForLoadState('networkidle', { timeout: 4000 });
+    } catch {
+      // Not every AFIP profile triggers a request on blur.
+    }
+    await this.page.waitForTimeout(250);
+  }
+
+  private async waitForSelectableOptions(
+    selectLocator: Locator,
+    timeoutMs = 20_000,
+  ): Promise<SelectOptionItem[]> {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const options = await selectLocator.locator('option').evaluateAll((nodes) =>
+        nodes.map((node, index) => {
+          const option = node as { value?: string; textContent?: string | null };
+          return {
+            index,
+            value: option.value?.trim() ?? '',
+            text: option.textContent?.replace(/\u00a0/g, ' ').trim() ?? '',
+          };
+        }),
+      );
+
+      const selectable = options.filter((option) => option.value.length > 0);
+      if (selectable.length > 0) {
+        return selectable;
+      }
+      await this.page.waitForTimeout(300);
+    }
+
+    throw new Error('No selectable options found in dropdown after waiting for dynamic load');
   }
 }

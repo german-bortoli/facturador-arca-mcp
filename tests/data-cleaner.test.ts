@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, test, expect } from 'vitest';
 import {
   cleanDocumentNumber,
   normalizeDocumentType,
@@ -299,9 +299,9 @@ describe('parseDateToAfip', () => {
     expect(parseDateToAfip('abc123')).toBe(null);
   });
 
-  test('should return null for Date objects', () => {
-    // Date type is allowed in the signature but treated as invalid by the implementation
-    expect(parseDateToAfip(new Date())).toBe(null);
+  test('should parse Date objects', () => {
+    const result = parseDateToAfip(new Date('2023-10-25'));
+    expect(result).toBe(20231025);
   });
 
   test('should handle different years', () => {

@@ -6,9 +6,11 @@ import { ColumnsSchema } from './types/file';
 import { FileParser } from './file-parser';
 import { invariant } from '@epic-web/invariant';
 import { InvoiceIssuer } from './invoice-issuer';
+import { createInterface } from 'node:readline/promises';
+import { stdin as input, stdout as output } from 'node:process';
 
 const { values } = parseArgs({
-  args: Bun.argv,
+  args: process.argv.slice(2),
   options: {
     now: {
       type: 'boolean',
@@ -45,8 +47,8 @@ const { values } = parseArgs({
       default: true,
     },
     headless: {
-      type: 'boolean',
-      default: false,
+      type: 'string',
+      default: 'true',
     },
     slowMo: {
       type: 'string',
@@ -56,6 +58,27 @@ const { values } = parseArgs({
   strict: true,
   allowPositionals: true,
 });
+
+function parseBooleanOption(
+  value: string | boolean | undefined,
+  defaultValue: boolean,
+): boolean {
+  if (value === undefined) {
+    return defaultValue;
+  }
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (['true', '1', 'yes', 'y', 'on'].includes(normalized)) {
+    return true;
+  }
+  if (['false', '0', 'no', 'n', 'off'].includes(normalized)) {
+    return false;
+  }
+  return defaultValue;
+}
 
 const getInvoicingDate = (): `${string}/${string}/${string}` => {
   const today = DateTime.now();
@@ -100,15 +123,17 @@ async function main() {
 
   console.table(valid)
 
-  const res = await prompt(msg);
+  const res = await askConfirmation(msg);
   if (res?.toLowerCase().trim() !== 'y') {
     console.debug('Exiting...');
     return;
   }
 
   const slowMoMs = Math.max(0, Number(values.slowMo) || 500);
+  const headlessMode = parseBooleanOption(values.headless, true);
+  console.debug(`Launching browser with headless=${headlessMode}`);
   const browser = await chromium.launch({
-    headless: values.headless,
+    headless: headlessMode,
     slowMo: slowMoMs,
     tracesDir: './traces',
   });
@@ -141,7 +166,7 @@ async function main() {
 
   if (values.saveSummary) {
     const format = values.summaryFormat === 'xlsx' ? 'xlsx' : 'csv';
-    issuer.saveSummaryToFile({
+    await issuer.saveSummaryToFile({
       path: values.saveSummary,
       format,
       includeSuccess: !values.summaryFailedOnly,
@@ -155,6 +180,15 @@ async function main() {
 
   const end = performance.now();
   console.debug(`Total time: ${DateTime.fromMillis(end - start).toFormat('ss.SSS')} seconds`);
+}
+
+async function askConfirmation(question: string): Promise<string> {
+  const rl = createInterface({ input, output });
+  try {
+    return await rl.question(question);
+  } finally {
+    rl.close();
+  }
 }
 
 try {

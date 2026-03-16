@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { getInvoiceDescription, getCurrentDefaultCode, getPeriodFromDate, getPeriodToDate } from '../functions';
 import { DateTime } from 'luxon';
 
@@ -8,7 +8,7 @@ describe('getInvoiceDescription', () => {
   beforeEach(() => {
     // Reset environment variables before each test
     process.env.ADD_MONTH_TO_CONCEPT = 'true';
-    process.env.GLOBAL_CONCEPT = undefined;
+    delete process.env.GLOBAL_CONCEPT;
   });
 
   afterEach(() => {
@@ -53,7 +53,7 @@ describe('getInvoiceDescription', () => {
 
   describe('without ADD_MONTH_TO_CONCEPT', () => {
     test('should return only concept when ADD_MONTH_TO_CONCEPT is not set', () => {
-      process.env.ADD_MONTH_TO_CONCEPT = undefined;
+      delete process.env.ADD_MONTH_TO_CONCEPT;
       expect(getInvoiceDescription('Test', '01/01/2026')).toBe('Test');
     });
 
@@ -66,7 +66,7 @@ describe('getInvoiceDescription', () => {
   describe('with GLOBAL_CONCEPT', () => {
     test('should use GLOBAL_CONCEPT when set', () => {
       process.env.GLOBAL_CONCEPT = 'Global Description';
-      process.env.ADD_MONTH_TO_CONCEPT = undefined;
+      delete process.env.ADD_MONTH_TO_CONCEPT;
       expect(getInvoiceDescription('Test', '01/01/2026')).toBe('Test - Global Description');
     });
 

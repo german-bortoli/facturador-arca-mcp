@@ -5,7 +5,7 @@ import { invariant } from '@epic-web/invariant';
 
 
 const { values } = parseArgs({
-  args: Bun.argv,
+  args: process.argv.slice(2),
   options: {
     now: {
       type: 'boolean',

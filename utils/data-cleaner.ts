@@ -159,7 +159,21 @@ export function parseIvaReceiverCode(
  * parseDateToAfip("2023-10-25") // 20231025
  */
 export function parseDateToAfip(dateStr: string | undefined | Date): number | null {
-  if (!dateStr || typeof dateStr !== 'string' || dateStr.trim() === '') {
+  if (!dateStr) {
+    return null;
+  }
+
+  if (dateStr instanceof Date) {
+    if (isNaN(dateStr.getTime())) {
+      return null;
+    }
+    const year = dateStr.getUTCFullYear();
+    const month = String(dateStr.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(dateStr.getUTCDate()).padStart(2, '0');
+    return Number(`${year}${month}${day}`);
+  }
+
+  if (typeof dateStr !== 'string' || dateStr.trim() === '') {
     return null;
   }
 
@@ -185,9 +199,16 @@ export function parseDateToAfip(dateStr: string | undefined | Date): number | nu
 
     // Try YYYY-MM-DD format (ISO format)
     if (cleaned.includes('-')) {
-      const date = new Date(cleaned);
-      if (!isNaN(date.getTime())) {
-        return formatDateToAfip(date);
+      const parts = cleaned.split('-');
+      if (parts.length === 3) {
+        const year = parseInt(parts[0]!, 10);
+        const month = parseInt(parts[1]!, 10);
+        const day = parseInt(parts[2]!, 10);
+        if (!isNaN(day) && !isNaN(month) && !isNaN(year)) {
+          return Number(
+            `${year.toString().padStart(4, '0')}${String(month).padStart(2, '0')}${String(day).padStart(2, '0')}`,
+          );
+        }
       }
     }
 
