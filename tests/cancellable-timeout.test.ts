@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { CancellableTimeout } from '../invoice-issuer';
+import { CancellableTimeout, extractAfipDateValidationError } from '../invoice-issuer';
 
 describe('CancellableTimeout', () => {
   describe('timeout fires when not disarmed', () => {
@@ -76,5 +76,30 @@ describe('CancellableTimeout', () => {
       );
       timeout.disarm(); // cleanup -- should not throw
     });
+  });
+});
+
+describe('extractAfipDateValidationError', () => {
+  test('returns undefined when no known AFIP date error exists', () => {
+    const message = extractAfipDateValidationError('Pantalla de receptor sin errores');
+    expect(message).toBeUndefined();
+  });
+
+  test('detects base AFIP invalid date message', () => {
+    const message = extractAfipDateValidationError(
+      'Error: La Fecha del Comprobante es inválida',
+    );
+    expect(message).toBe(
+      'AFIP rejected invoice date: La Fecha del Comprobante es invalida',
+    );
+  });
+
+  test('detects detailed AFIP invalid date message', () => {
+    const message = extractAfipDateValidationError(
+      'Error: La Fecha del Comprobante es inválida (es anterior al Inicio de Actividades o existen comprobantes emitidos con fecha posterior a la ingresada)',
+    );
+    expect(message).toBe(
+      'AFIP rejected invoice date: La Fecha del Comprobante es invalida (es anterior al Inicio de Actividades o existen comprobantes emitidos con fecha posterior a la ingresada)',
+    );
   });
 });

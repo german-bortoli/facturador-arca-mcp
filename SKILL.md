@@ -67,7 +67,7 @@ When the user provides a PDF or image instead of a CSV, extract the fields by re
 | `NRO_COMP` | "Punto de Venta: Comp. Nro" — format as `XXXXX-XXXXXXXXX` (e.g. `00002-00000115`). Leave blank if not available. |
 | `FECHA` | Emission date in `DD/MM/YYYY` format. Found as "Fecha de Emisión". |
 | `CONCEPTO` | Description of the service or product. Usually the item description line (e.g. `Desarrollo de software`, `Servicio de programacion de software`). |
-| `SERVICIOS` | Monetary amount of the service item. Usually the subtotal of the service line. |
+| `SERVICIOS` | Legacy optional field. Keep empty by default unless the user explicitly provides/requests it. |
 | `FORMA_DE_PAGO` | Payment condition printed as "Condición de venta" (e.g. `Transferencia Bancaria`, `Contado`). |
 | `TOTAL` | "Importe Total" — the grand total amount. |
 | `PAGADOR` | "Apellido y Nombre / Razón Social" of the receiver/client (e.g. `PEREZ JUAN`, `EMPRESA COPADA SRL`). |
@@ -76,7 +76,8 @@ When the user provides a PDF or image instead of a CSV, extract the fields by re
 | `DIRECCION` | Receiver's address. Found as "Domicilio" in the receiver section. |
 | `CONDICION_IVA_RECEPTOR` | IVA condition of the receiver (see codes table below). Found as "Condición frente al IVA" in the receiver section. |
 
-Fields not present in the document (e.g. `MATRICULA`, `HOSPEDAJE`, `RESIDENTE`) should be left empty.
+Fields not present in the document (e.g. `MATRICULA`, `HOSPEDAJE`, `SERVICIOS`, `RESIDENTE`) should be left empty.
+`TOTAL` is the authoritative amount for invoice emission.
 
 ### Real examples extracted from reference invoices
 
@@ -97,12 +98,13 @@ MARZO,Factura C,00001-00000002,15/03/2026,Servicio de programacion de software,2
 Bank receipts typically show less data than an AFIP invoice. Extract what's available and ask the user to confirm or fill in anything missing:
 
 - **Receiver name** → `PAGADOR`
-- **Transfer amount** → `TOTAL` (and `SERVICIOS` if it's a service)
+- **Transfer amount** → `TOTAL` only
 - **Date** → `FECHA`
 - **Concept/description** → `CONCEPTO`
 - **CBU/account holder name** → may help identify `DOCUMENTO` / `TIPO_DOC`, but usually ask the user
 
 Always ask the user for any field that cannot be confidently inferred from the document. Do not guess CUIT numbers — ask explicitly.
+Do not duplicate the amount in `HOSPEDAJE` or `SERVICIOS` unless the user explicitly asks for those legacy fields.
 
 ### Ambiguity resolution — ask before proceeding
 

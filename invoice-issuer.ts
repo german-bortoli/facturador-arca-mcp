@@ -77,12 +77,45 @@ function sanitizePathSegment(value: string): string {
 function classifyFailureCode(error: string): string {
   const normalized = error.toLowerCase();
   if (normalized.includes('timeout')) return 'TIMEOUT';
+  if (normalized.includes('afip rejected invoice date')) return 'DATE_VALIDATION';
   if (normalized.includes('domicilio')) return 'RECEIVER_ADDRESS';
   if (normalized.includes('puntodeventa')) return 'POINT_OF_SALE';
   if (normalized.includes('idtipodocreceptor') || normalized.includes('document type')) return 'DOCUMENT_TYPE';
   if (normalized.includes('comprobante')) return 'INVOICE_TYPE';
   if (normalized.includes('total values')) return 'TOTAL_MISMATCH';
   return 'UNKNOWN';
+}
+
+export function extractAfipDateValidationError(
+  pageText: string,
+): string | undefined {
+  const normalize = (value: string) =>
+    value
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const normalized = normalize(pageText);
+  const hasInvalidDateMessage = normalized.includes(
+    'la fecha del comprobante es invalida',
+  );
+  if (!hasInvalidDateMessage) {
+    return undefined;
+  }
+
+  const hasKnownDetail =
+    normalized.includes('es anterior al inicio de actividades') ||
+    normalized.includes(
+      'existen comprobantes emitidos con fecha posterior a la ingresada',
+    );
+
+  if (hasKnownDetail) {
+    return 'AFIP rejected invoice date: La Fecha del Comprobante es invalida (es anterior al Inicio de Actividades o existen comprobantes emitidos con fecha posterior a la ingresada)';
+  }
+
+  return 'AFIP rejected invoice date: La Fecha del Comprobante es invalida';
 }
 
 //TODO: check why this was used
@@ -427,6 +460,7 @@ export class InvoiceIssuer {
     await deadlineDateInput.fill(getPeriodToDate(date));
 
     await this.page.locator('text=Continuar >').click();
+    await this.failFastOnKnownDateValidationError();
 
     const { invoiceData } = mapInvoiceData(inv);
     const documentType = invoiceData.DocTipo;
@@ -895,5 +929,28 @@ export class InvoiceIssuer {
     }
 
     throw new Error('No selectable options found in dropdown after waiting for dynamic load');
+  }
+
+  private async failFastOnKnownDateValidationError(): Promise<void> {
+    const deadline = Date.now() + 8_000;
+    const receiverSelect = this.page.locator('select[name="idIVAReceptor"]');
+
+    while (Date.now() < deadline) {
+      const bodyText = await this.page.locator('body').innerText().catch(() => '');
+      const afipDateError = extractAfipDateValidationError(bodyText);
+      if (afipDateError) {
+        throw new Error(afipDateError);
+      }
+
+      const receiverCount = await receiverSelect.count();
+      if (receiverCount > 0) {
+        const isVisible = await receiverSelect.first().isVisible().catch(() => false);
+        if (isVisible) {
+          return;
+        }
+      }
+
+      await this.page.waitForTimeout(200);
+    }
   }
 }

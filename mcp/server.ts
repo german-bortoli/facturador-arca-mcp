@@ -291,8 +291,12 @@ MES,COMPROBANTE,NRO_COMP,FECHA,CONCEPTO,MATRICULA,HOSPEDAJE,SERVICIOS,FORMA_DE_P
 - [ ] TOTAL amount
 - [ ] CONCEPTO description
 - [ ] FORMA_DE_PAGO
+- [ ] FECHA_SERVICIO_DESDE <= FECHA_SERVICIO_HASTA (never allow end date before start date)
+- [ ] Keep legacy optional fields (\`MATRICULA\`, \`HOSPEDAJE\`, \`SERVICIOS\`, \`RESIDENTE\`) empty unless explicitly provided by the user
 
 If any field cannot be reliably extracted, ask the user.
+If \`FECHA_SERVICIO_HASTA\` is earlier than \`FECHA_SERVICIO_DESDE\`, stop and ask the user which date should be corrected.
+Use \`TOTAL\` as the authoritative amount. Do not duplicate the amount into \`HOSPEDAJE\` or \`SERVICIOS\` unless the user explicitly asks for those legacy fields.
 Once confirmed, pass the CSV to \`dry_run_csv\`.
 
 Read the \`SKILL.md\` resource for the complete field mapping table, IVA condition codes, and extraction examples from PDFs and screenshots.`,
@@ -317,7 +321,7 @@ Read the \`SKILL.md\` resource for the complete field mapping table, IVA conditi
 5. **Emit** — call \`emit_invoice\` with \`now: true\`.
 6. **Report** — show success/failed counts. Render \`downloadUrl\` links if present.
 
-Safety: never print raw credentials, never guess CUIT/DNI, retry with \`now: true\` if AFIP rejects the date.
+Safety: never print raw credentials, never guess CUIT/DNI, retry with \`now: true\` if AFIP rejects the date, and never proceed when service end date is earlier than service start date (ask the user to correct first).
 
 Read the \`SKILL.md\` resource for full payload examples and AFIP behavior notes.`,
         },
