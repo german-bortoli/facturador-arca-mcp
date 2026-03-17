@@ -82,6 +82,12 @@ Tools disponibles:
 - `dry_run_csv`
 - `validate_credentials_source`
 
+Prompts disponibles:
+
+- `facturador_onboarding` — Explica cómo usar este servidor MCP de punta a punta: tools disponibles, inputs requeridos, variables de entorno y modos de conexión.
+- `build_invoice_csv_from_input` — Guía para construir `invoiceCsvText` a partir de PDFs, screenshots, recibos bancarios o notas. Acepta un argumento `inputDescription` con la descripción del input. Devuelve un CSV borrador y un checklist de campos a confirmar.
+- `run_safe_invoice_flow` — Checklist paso a paso para emitir facturas de forma segura: validar credenciales, dry-run, confirmar con el usuario, y luego emitir.
+
 ### Variables de entorno
 
 | Variable | Ejemplo | Descripción |
