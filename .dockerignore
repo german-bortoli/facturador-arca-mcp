@@ -1,0 +1,11 @@
+.git
+.gitignore
+node_modules
+npm-debug.log
+.env
+invoices
+agent-transcripts
+.cursor
+coverage
+dist
+*.local
