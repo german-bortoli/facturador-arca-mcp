@@ -11,4 +11,5 @@ invoices/**
 .cursor
 .agents
 traces
-client_store.db*
+client_store.db
+client_store.db-*
