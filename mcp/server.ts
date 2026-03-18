@@ -468,7 +468,12 @@ async function main() {
     : undefined;
 
   if (mcpPort) {
-    await startStreamableHttpTransport(mcpPort);
+    try {
+      await startStreamableHttpTransport(mcpPort);
+    } catch (err) {
+      console.error(`[mcp-http] Failed to start HTTP transport on port ${mcpPort}:`, err);
+      console.error('[mcp-http] Continuing with stdio transport only.');
+    }
   }
 }
 
