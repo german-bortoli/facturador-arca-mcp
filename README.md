@@ -78,9 +78,13 @@ npm run mcp:server
 
 Tools disponibles:
 
-- `emit_invoice`
-- `dry_run_csv`
-- `validate_credentials_source`
+- `store_client` — Persiste credenciales AFIP y puntos de venta de un cliente en SQLite local (requiere `CLIENT_STORE_SECRET_KEY`).
+- `list_clients` — Lista todos los clientes guardados (credenciales enmascaradas).
+- `update_client` — Actualiza parcialmente un cliente existente (solo los campos enviados se modifican).
+- `delete_client` — Elimina permanentemente un cliente del store local.
+- `emit_invoice` — Emite facturas. Acepta `issuerCuit` para cargar credenciales desde el store local.
+- `dry_run_csv` — Valida CSV sin emitir.
+- `validate_credentials_source` — Verifica credenciales. Acepta `issuerCuit` para validar credenciales guardadas.
 
 Prompts disponibles:
 
@@ -95,6 +99,7 @@ Prompts disponibles:
 | `INVOICE_SERVER_HOST` | `http://localhost` | URL base (sin puerto) para construir las URLs de descarga de PDFs. Cuando está configurada, `emit_invoice` incluye `downloadUrl` por cada factura emitida. |
 | `INVOICE_HTTP_SERVER_PORT` | `8876` | Puerto del servidor HTTP embebido que sirve los PDFs generados bajo `/public/invoices/`. Por defecto `8876`. |
 | `INVOICE_MCP_SERVER_PORT` | `9000` | Puerto del transporte HTTP/SSE del servidor MCP. Opcional: si no está configurado, el servidor corre únicamente por stdio. |
+| `CLIENT_STORE_SECRET_KEY` | `mi-clave-secreta` | Clave secreta para encriptar contraseñas AFIP en el store SQLite local. Requerida al usar `store_client`. |
 
 ### Configuración en Claude Desktop
 
@@ -185,6 +190,7 @@ Opcionales:
 
 - `credentialsCsvText`
 - `credentials` (`AFIP_USERNAME`, `AFIP_PASSWORD`, `AFIP_ISSUER_CUIT`, `RAZON_SOCIAL`)
+- `issuerCuit` — Carga credenciales desde el store SQLite local (guardadas previamente con `store_client`). Si `pointOfSale` se omite, se usa automáticamente el primer punto de venta guardado del cliente.
 - `allowInteractivePrompt`
 - `preferredIssuerCuit`
 - `headless` (por defecto `true`; acepta boolean o string)
@@ -199,7 +205,8 @@ Precedencia de credenciales:
 
 1. `credentials` explícitas
 2. `credentialsCsvText`
-3. fallback interactivo por prompt (si está habilitado y hay TTY disponible)
+3. Store SQLite local (por `issuerCuit`)
+4. Fallback interactivo por prompt (si está habilitado y hay TTY disponible)
 
 ### Payload rápido de prueba (MCP)
 
@@ -304,6 +311,61 @@ Notas:
 
 - En la automatización UI actual, los flujos con `DNI` fuerzan condición IVA `5` (Consumidor final).
 - Para `CUIT`/`CUIL`, `CONDICION_IVA_RECEPTOR` se respeta (o hace fallback a `6` si falta o es inválido).
+
+### Store de clientes (CRUD)
+
+Los tools de gestión de clientes permiten guardar, listar, actualizar y eliminar credenciales AFIP y puntos de venta en una base de datos SQLite local (`client_store.db` en la raíz del proyecto). La contraseña se almacena con encriptación reversible usando `CLIENT_STORE_SECRET_KEY`.
+
+**Crear cliente (`store_client`):**
+
+```json
+{
+  "AFIP_USERNAME": "20999888776",
+  "AFIP_PASSWORD": "mi-password",
+  "AFIP_ISSUER_CUIT": "20999888776",
+  "businessName": "Mi Empresa SRL",
+  "pointsOfSale": ["1", "3", "5"],
+  "defaultPointOfSale": "3"
+}
+```
+
+**Listar clientes (`list_clients`):** sin parámetros requeridos. Devuelve todos los clientes con credenciales enmascaradas.
+
+**Actualizar cliente (`update_client`):** solo se envían los campos a modificar. El cliente debe existir previamente.
+
+```json
+{
+  "AFIP_ISSUER_CUIT": "20999888776",
+  "AFIP_PASSWORD": "nueva-password",
+  "pointsOfSale": ["1", "3", "5", "7"]
+}
+```
+
+**Eliminar cliente (`delete_client`):**
+
+```json
+{
+  "AFIP_ISSUER_CUIT": "20999888776"
+}
+```
+
+Una vez guardado el cliente, se puede emitir una factura sin re-enviar credenciales:
+
+```json
+{
+  "invoiceCsvText": "...",
+  "issuerCuit": "20999888776",
+  "headless": true
+}
+```
+
+El sistema carga las credenciales desde SQLite y selecciona automáticamente el primer punto de venta guardado (o el `defaultPointOfSale` si fue configurado). Se puede pasar `pointOfSale` explícitamente para usar otro.
+
+**Flujo recomendado:**
+
+1. `store_client` (una vez por cliente, o al actualizar datos)
+2. `dry_run_csv` (validar CSV)
+3. `emit_invoice` con `issuerCuit` (emitir facturas usando credenciales guardadas)
 
 ## Verificación
 

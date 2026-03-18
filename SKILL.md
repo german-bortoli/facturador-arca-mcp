@@ -9,9 +9,16 @@ description: Calls the facturador MCP to validate and emit AFIP invoices when th
 
 Use this skill to process invoice input files and call the project MCP tools:
 
+### Invoice tools
 - `validate_credentials_source` for credential resolution check
 - `dry_run_csv` for validation only
 - `emit_invoice` for real emission
+
+### Client store tools
+- `store_client` to persist AFIP credentials and points of sale in local SQLite
+- `list_clients` to list all stored clients (masked credentials)
+- `update_client` to partially update a stored client
+- `delete_client` to remove a stored client
 
 The MCP expects `invoiceCsvText` in the project legacy CSV format.
 
@@ -25,6 +32,8 @@ Apply this skill when the user:
 - shares AFIP credentials and asks to emit invoices
 - asks to validate invoice rows before emission
 - asks to run the facturador MCP flow end-to-end
+- asks to store, list, update, or delete a client
+- asks to save AFIP credentials for reuse
 
 ## Required Inputs
 
@@ -35,11 +44,9 @@ Collect or confirm:
    - Excel file (`.xlsx`)
    - PDF invoice (previous AFIP invoice used as reference)
    - Screenshot or image of a bank receipt, transfer, or billing document
-2. Credentials:
-   - `AFIP_USERNAME`
-   - `AFIP_PASSWORD`
-   - `AFIP_ISSUER_CUIT`
-   - `RAZON_SOCIAL`
+2. Credentials (one of):
+   - **Stored client**: pass `issuerCuit` to load credentials from SQLite (saved via `store_client`). Use `list_clients` to check available clients.
+   - **Explicit**: `AFIP_USERNAME`, `AFIP_PASSWORD`, `AFIP_ISSUER_CUIT`, `RAZON_SOCIAL`
 3. Run mode:
    - validation only (`dry_run_csv`), or
    - real emission (`emit_invoice`)
@@ -49,8 +56,72 @@ Optional run settings:
 - `headless` (default `true`)
 - `now`
 - `retry`
-- `pointOfSale`
+- `pointOfSale` (auto-selected from stored client POS when omitted)
 - `debug`
+
+---
+
+## Client Store
+
+The client store persists AFIP credentials and points of sale in local SQLite (`client_store.db`). Passwords are encrypted with `CLIENT_STORE_SECRET_KEY`. Once stored, credentials can be loaded by `issuerCuit` across all credential-accepting tools.
+
+### Store a new client
+
+```json
+{
+  "AFIP_USERNAME": "20999888776",
+  "AFIP_PASSWORD": "my-password",
+  "AFIP_ISSUER_CUIT": "20999888776",
+  "businessName": "My Company SRL",
+  "pointsOfSale": ["1", "3"],
+  "defaultPointOfSale": "1"
+}
+```
+
+### List stored clients
+
+Call `list_clients` with no arguments. Returns masked credentials and POS data for all clients.
+
+### Update a client (partial)
+
+Only provide the fields you want to change. The client must already exist.
+
+```json
+{
+  "AFIP_ISSUER_CUIT": "20999888776",
+  "AFIP_PASSWORD": "new-password",
+  "pointsOfSale": ["1", "3", "5"]
+}
+```
+
+### Delete a client
+
+```json
+{
+  "AFIP_ISSUER_CUIT": "20999888776"
+}
+```
+
+### Credential resolution priority
+
+When `emit_invoice` or `validate_credentials_source` resolves credentials:
+
+1. Explicit `credentials` object (highest priority)
+2. `credentialsCsvText`
+3. SQLite stored client (by `issuerCuit`)
+4. Interactive prompt (if enabled, lowest priority)
+
+### Using stored clients with emit_invoice
+
+```json
+{
+  "invoiceCsvText": "<csv-text>",
+  "issuerCuit": "20999888776",
+  "now": true
+}
+```
+
+When `pointOfSale` is omitted, the system auto-selects `defaultPointOfSale` or the first stored POS.
 
 ---
 
@@ -121,24 +192,47 @@ Present a summary of extracted fields and ask the user to confirm before running
 
 ## Workflow
 
-Copy this checklist and execute in order:
+**CRITICAL — Credential resolution before emit_invoice or validate_credentials_source:**
+
+1. **ALWAYS** call `list_clients` first.
+2. If the response contains clients → use the matching `issuerCuit` **exactly as returned by `list_clients`**. Ask the user which client/point of sale if ambiguous.
+3. If no stored clients exist → ask the user for AFIP credentials (`AFIP_USERNAME`, `AFIP_PASSWORD`, `AFIP_ISSUER_CUIT`, `RAZON_SOCIAL`) and pass them as the `credentials` object.
+4. **NEVER** call `emit_invoice` or `validate_credentials_source` without providing either `issuerCuit` or `credentials`.
+5. **NEVER** set `allowInteractivePrompt` to `true`.
+
+**WARNING — Do NOT confuse `issuerCuit` with `DOCUMENTO`:**
+- `issuerCuit` = the CUIT of the business **issuing** the invoice (your AFIP login). Get it from `list_clients`.
+- `DOCUMENTO` = the CUIT/DNI of the **receiver/client** being invoiced (appears in the CSV data).
+- These are two different entities. Never use the receiver's CUIT as `issuerCuit`.
+
+Execute these steps in order:
 
 ```text
 MCP Invoice Workflow
+- [ ] Call list_clients to check for stored clients
+- [ ] Resolve credentials: use issuerCuit (stored) or ask the user for explicit credentials
 - [ ] Extract or receive invoice data (CSV, XLSX, PDF, or image)
 - [ ] Map extracted fields to legacy CSV format
 - [ ] Ask user to confirm or fill in any missing fields
-- [ ] Validate credentials source first
-- [ ] Run dry_run_csv first
-- [ ] If valid rows exist and user confirms, run emit_invoice
+- [ ] Validate credentials source (with issuerCuit or credentials object)
+- [ ] Run dry_run_csv to validate invoice data
+- [ ] If valid rows exist and user confirms, run emit_invoice (with issuerCuit or credentials object)
 - [ ] Return structured result (success, failed, tracePath)
 - [ ] If issued[].downloadUrl is present, render download links
 ```
 
 ### 1) Validate credentials source
 
-Call `validate_credentials_source` before processing invoices:
+Call `validate_credentials_source` before processing invoices.
 
+**With stored client:**
+```json
+{
+  "issuerCuit": "20999888776"
+}
+```
+
+**With explicit credentials:**
 ```json
 {
   "credentials": {
@@ -153,11 +247,13 @@ Call `validate_credentials_source` before processing invoices:
 
 If validation fails, stop and ask the user to correct credentials.
 
-Credential fallback mode:
+Credential resolution priority:
 
-- Preferred: explicit `credentials` object.
-- Fallback: `credentialsCsvText` with optional `preferredIssuerCuit`.
-- Last resort: `allowInteractivePrompt: true` only when an interactive session is available.
+1. Explicit `credentials` object.
+2. `credentialsCsvText` with optional `preferredIssuerCuit`.
+3. Stored client via `issuerCuit`.
+
+**WARNING**: Never set `allowInteractivePrompt` to `true` when running as an MCP server — it will break the stdio transport. Always provide `issuerCuit` or `credentials` explicitly.
 
 ### 2) Normalize input to legacy CSV text
 
@@ -185,8 +281,20 @@ If `invalidCount > 0`, present invalid rows and stop unless user asks to continu
 
 ### 4) Emit only after confirmation
 
-Call `emit_invoice` with:
+Call `emit_invoice`.
 
+**With stored client:**
+```json
+{
+  "invoiceCsvText": "<legacy-csv-text>",
+  "issuerCuit": "20999888776",
+  "headless": true,
+  "now": true,
+  "retry": false
+}
+```
+
+**With explicit credentials:**
 ```json
 {
   "invoiceCsvText": "<legacy-csv-text>",

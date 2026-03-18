@@ -1,6 +1,7 @@
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { parseCredentialsCsvText, type CredentialsRow } from './parsers/credentials-csv';
+import { getClientByIssuerCuit, decryptClientPassword } from './client-store/sqlite';
 import type { CredentialInput } from './types';
 
 export interface ResolveCredentialsInput {
@@ -8,6 +9,8 @@ export interface ResolveCredentialsInput {
   credentialsCsvText?: string;
   preferredIssuerCuit?: string;
   allowInteractivePrompt?: boolean;
+  /** When set, attempt to load credentials from SQLite by issuer CUIT. */
+  issuerCuit?: string;
 }
 
 export interface ResolvedCredentials {
@@ -15,6 +18,10 @@ export interface ResolvedCredentials {
   AFIP_PASSWORD: string;
   AFIP_ISSUER_CUIT: string;
   RAZON_SOCIAL: string;
+  /** Available POS values from stored client (if loaded from SQLite). */
+  storedPointsOfSale?: string[];
+  /** Default POS from stored client (if loaded from SQLite). */
+  storedDefaultPointOfSale?: string | null;
 }
 
 function pickCsvCredentialRow(
@@ -69,6 +76,8 @@ export async function resolveCredentials(
 ): Promise<ResolvedCredentials> {
   const explicit = inputConfig.explicit ?? {};
   let csvCredentials: CredentialInput = {};
+  let storedPointsOfSale: string[] | undefined;
+  let storedDefaultPointOfSale: string | null | undefined;
 
   if (inputConfig.credentialsCsvText?.trim()) {
     const rows = parseCredentialsCsvText(inputConfig.credentialsCsvText);
@@ -82,6 +91,24 @@ export async function resolveCredentials(
   }
 
   let merged = mergeCredentials(csvCredentials, explicit);
+
+  // Priority 3: fill remaining gaps from SQLite-stored client credentials.
+  const lookupCuit = inputConfig.issuerCuit ?? merged.AFIP_ISSUER_CUIT;
+  if (lookupCuit?.trim()) {
+    const storedClient = getClientByIssuerCuit(lookupCuit.trim());
+    if (storedClient) {
+      const storedCreds: CredentialInput = {
+        AFIP_USERNAME: storedClient.afipUsername,
+        AFIP_PASSWORD: decryptClientPassword(storedClient),
+        AFIP_ISSUER_CUIT: storedClient.issuerCuit,
+        RAZON_SOCIAL: storedClient.businessName,
+      };
+      merged = mergeCredentials(storedCreds, merged);
+      storedPointsOfSale = storedClient.pointsOfSale;
+      storedDefaultPointOfSale = storedClient.defaultPointOfSale;
+    }
+  }
+
   const missing = Object.entries(merged)
     .filter(([, value]) => !value || value.trim().length === 0)
     .map(([key]) => key);
@@ -105,7 +132,7 @@ export async function resolveCredentials(
     throw new Error(
       `Missing credential values: ${stillMissing.join(
         ', ',
-      )}. Provide explicit values, credentials CSV, or enable interactive prompt.`,
+      )}. Provide explicit values, credentials CSV, stored client, or enable interactive prompt.`,
     );
   }
 
@@ -114,5 +141,7 @@ export async function resolveCredentials(
     AFIP_PASSWORD: merged.AFIP_PASSWORD!,
     AFIP_ISSUER_CUIT: merged.AFIP_ISSUER_CUIT!,
     RAZON_SOCIAL: merged.RAZON_SOCIAL!,
+    storedPointsOfSale,
+    storedDefaultPointOfSale,
   };
 }
