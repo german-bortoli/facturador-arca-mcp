@@ -11,6 +11,8 @@ export interface EmitInvoiceInput {
   credentials?: CredentialInput;
   allowInteractivePrompt?: boolean;
   preferredIssuerCuit?: string;
+  /** Load credentials from SQLite by issuer CUIT (no need to pass credentials explicitly). */
+  issuerCuit?: string;
   headless?: boolean | string;
   slowMoMs?: number;
   retry?: boolean;
@@ -42,6 +44,10 @@ export type DryRunLegacyCsvInput = DryRunCsvInput;
 export interface ValidateCredentialsSourceInput {
   credentialsCsvText?: string;
   credentials?: CredentialInput;
+  issuerCuit?: string;
   allowInteractivePrompt?: boolean;
   preferredIssuerCuit?: string;
 }
+
+export type { StoreClientToolInput } from './tools/store-client';
+

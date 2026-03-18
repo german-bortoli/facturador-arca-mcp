@@ -63,15 +63,22 @@ export async function emitInvoice(input: EmitInvoiceInput) {
     explicit: input.credentials,
     credentialsCsvText: input.credentialsCsvText,
     preferredIssuerCuit: input.preferredIssuerCuit,
-    allowInteractivePrompt: input.allowInteractivePrompt ?? true,
+    issuerCuit: input.issuerCuit,
+    allowInteractivePrompt: input.allowInteractivePrompt ?? false,
   });
 
-  // Existing issuance flow reads credentials from process.env in functions.ts.
+  // Auto-select POS: explicit > stored default > first stored POS > empty.
+  let resolvedPos = input.pointOfSale?.trim() || '';
+  if (!resolvedPos && credentials.storedPointsOfSale?.length) {
+    resolvedPos =
+      credentials.storedDefaultPointOfSale ?? credentials.storedPointsOfSale[0] ?? '';
+  }
+
   process.env.AFIP_USERNAME = credentials.AFIP_USERNAME;
   process.env.AFIP_PASSWORD = credentials.AFIP_PASSWORD;
   process.env.AFIP_ISSUER_CUIT = credentials.AFIP_ISSUER_CUIT;
   process.env.RAZON_SOCIAL = credentials.RAZON_SOCIAL;
-  process.env.POINT_OF_SALE = input.pointOfSale?.trim() || '';
+  process.env.POINT_OF_SALE = resolvedPos;
   process.env.CURRENCY = input.currency || process.env.CURRENCY || 'ARS';
   process.env.GLOBAL_CONCEPT = input.globalConcept || '';
   process.env.ADD_MONTH_TO_CONCEPT = input.addMonthToConcept ? 'true' : 'false';

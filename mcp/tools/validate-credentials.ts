@@ -14,8 +14,9 @@ export async function validateCredentialsSource(
   const credentials = await resolveCredentials({
     explicit: input.credentials,
     credentialsCsvText: input.credentialsCsvText,
+    issuerCuit: input.issuerCuit,
     preferredIssuerCuit: input.preferredIssuerCuit,
-    allowInteractivePrompt: input.allowInteractivePrompt ?? true,
+    allowInteractivePrompt: input.allowInteractivePrompt ?? false,
   });
 
   return {
