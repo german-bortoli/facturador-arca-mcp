@@ -152,6 +152,13 @@ const tools: Tool[] = [
           type: 'boolean',
           description: 'Keep issuer flow in debug mode (no final issue submission).',
         },
+        loginUrl: {
+          type: 'string',
+          description:
+            'AFIP login URL. Defaults to the Monotributo login. ' +
+            'Use "https://auth.afip.gob.ar/contribuyente_/login.xhtml?action=SYSTEM&system=rcel" ' +
+            'for Responsable Inscripto taxpayers.',
+        },
         serverHost: {
           type: 'string',
           description:
@@ -431,6 +438,24 @@ const PROMPT_CONTENT: Record<string, (args?: Record<string, string>) => { descri
 5. User confirms → \`emit_invoice\` with \`credentials\` object
 6. Show \`downloadUrl\` links if present
 
+## IVA Receiver Condition
+
+\`CONDICION_IVA_RECEPTOR\` accepts numeric codes (e.g. \`1\`) or Spanish text labels (e.g. \`IVA Responsable Inscripto\`, \`Consumidor Final\`). Labels are case/accent-insensitive.
+
+## Factura A (Responsable Inscripto)
+
+For RI taxpayers issuing Factura A:
+- Pass \`loginUrl: "https://auth.afip.gob.ar/contribuyente_/login.xhtml?action=SYSTEM&system=rcel"\` to skip the Monotributo portal.
+- Use \`CONDICION_IVA_RECEPTOR=IVA Responsable Inscripto\` (or \`1\`).
+- Set \`IVA_EXENTO=true\` in the CSV for IVA-exempt invoices. Without it, 21% IVA is added on top of TOTAL.
+- Use \`PERIODO_DESDE\` and \`PERIODO_HASTA\` for explicit service period dates. If omitted, the period is auto-calculated from the invoice date.
+
+Example CSV row (Factura A, IVA exempt):
+\`\`\`
+FECHA,PERIODO_DESDE,PERIODO_HASTA,CONCEPTO,TOTAL,PAGADOR,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR,FORMA_DE_PAGO,COMPROBANTE,IVA_EXENTO
+25/03/2026,01/02/2026,28/02/2026,Honorarios profesionales,100000,EMPRESA SA,CUIT,30999888770,"Av. Corrientes 1234, CABA",IVA Responsable Inscripto,Transferencia Bancaria,Factura A,true
+\`\`\`
+
 Read the \`SKILL.md\` resource for the full guide: field mapping, IVA codes, env vars, and AFIP behavior notes.`,
         },
       },
@@ -456,26 +481,36 @@ Read the \`SKILL.md\` resource for the full guide: field mapping, IVA codes, env
 ## CSV header
 
 \`\`\`
-MES,COMPROBANTE,NRO_COMP,FECHA,CONCEPTO,MATRICULA,HOSPEDAJE,SERVICIOS,FORMA_DE_PAGO,TOTAL,PAGADOR,RESIDENTE,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR
+MES,COMPROBANTE,NRO_COMP,FECHA,CONCEPTO,MATRICULA,HOSPEDAJE,SERVICIOS,FORMA_DE_PAGO,TOTAL,PAGADOR,RESIDENTE,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR,PERIODO_DESDE,PERIODO_HASTA,IVA_EXENTO
 \`\`\`
 
 ## Checklist — confirm before proceeding
 
+- [ ] COMPROBANTE (Factura A, B, or C — determines AFIP form flow and IVA handling)
 - [ ] PAGADOR (receiver name)
 - [ ] DOCUMENTO (CUIT/DNI) — never guess, always confirm
-- [ ] CONDICION_IVA_RECEPTOR code
+- [ ] CONDICION_IVA_RECEPTOR (numeric code or text label, e.g. \`1\` or \`IVA Responsable Inscripto\`)
 - [ ] TOTAL amount
 - [ ] CONCEPTO description
 - [ ] FORMA_DE_PAGO
-- [ ] FECHA_SERVICIO_DESDE <= FECHA_SERVICIO_HASTA (never allow end date before start date)
+- [ ] PERIODO_DESDE / PERIODO_HASTA — service period dates (DD/MM/YYYY). If omitted, auto-calculated from FECHA
+- [ ] IVA_EXENTO — set to \`true\` for IVA-exempt Factura A invoices (total = net, no IVA added)
 - [ ] Keep legacy optional fields (\`MATRICULA\`, \`HOSPEDAJE\`, \`SERVICIOS\`, \`RESIDENTE\`) empty unless explicitly provided by the user
 
+## Factura A notes
+
+For Factura A (RI to RI):
+- Use \`CONDICION_IVA_RECEPTOR=IVA Responsable Inscripto\` (or code \`1\`)
+- Set \`IVA_EXENTO=true\` if the service is IVA exempt. Without it, 21% IVA is added on top of TOTAL.
+- Always include \`PERIODO_DESDE\` and \`PERIODO_HASTA\` explicitly — do not rely on auto-calculation.
+- Pass \`loginUrl\` in the emit_invoice call for RI taxpayers.
+
 If any field cannot be reliably extracted, ask the user.
-If \`FECHA_SERVICIO_HASTA\` is earlier than \`FECHA_SERVICIO_DESDE\`, stop and ask the user which date should be corrected.
+If \`PERIODO_HASTA\` is earlier than \`PERIODO_DESDE\`, stop and ask the user which date should be corrected.
 Use \`TOTAL\` as the authoritative amount. Do not duplicate the amount into \`HOSPEDAJE\` or \`SERVICIOS\` unless the user explicitly asks for those legacy fields.
 Once confirmed, pass the CSV to \`dry_run_csv\`.
 
-Read the \`SKILL.md\` resource for the complete field mapping table, IVA condition codes, and extraction examples from PDFs and screenshots.`,
+Read the \`SKILL.md\` resource for the complete field mapping table, IVA condition codes, and Factura A examples.`,
         },
       },
     ],
@@ -501,12 +536,16 @@ Read the \`SKILL.md\` resource for the complete field mapping table, IVA conditi
 2. **Build CSV** — use the \`build_invoice_csv_from_input\` prompt if needed.
 3. **Dry run** — call \`dry_run_csv\`. Stop if \`invalidCount > 0\`.
 4. **Confirm** — present invoice count, totals, and receiver names. **Do not proceed without user confirmation.**
-5. **Emit** — call \`emit_invoice\` with \`now: true\` and \`issuerCuit\` (or \`credentials\` object).
+5. **Emit** — call \`emit_invoice\` with \`now: true\` and \`issuerCuit\` (or \`credentials\` object). For Responsable Inscripto taxpayers (not Monotributo), add \`loginUrl: "https://auth.afip.gob.ar/contribuyente_/login.xhtml?action=SYSTEM&system=rcel"\`.
 6. **Report** — show success/failed counts. Render \`downloadUrl\` links if present.
 
-Safety: never print raw credentials, never guess CUIT/DNI, retry with \`now: true\` if AFIP rejects the date, and never proceed when service end date is earlier than service start date (ask the user to correct first).
+Notes:
+- \`CONDICION_IVA_RECEPTOR\` accepts numeric codes (e.g. \`1\`) or text labels (e.g. \`IVA Responsable Inscripto\`).
+- For Factura A (RI to RI): set \`IVA_EXENTO=true\` in the CSV for exempt invoices. Use \`PERIODO_DESDE\`/\`PERIODO_HASTA\` for explicit service periods.
+- Without \`IVA_EXENTO=true\`, Factura A defaults to 21% IVA added on top of TOTAL.
+- Safety: never print raw credentials, never guess CUIT/DNI, retry with \`now: true\` if AFIP rejects the date, and never proceed when service end date is earlier than service start date (ask the user to correct first).
 
-Read the \`SKILL.md\` resource for full payload examples and AFIP behavior notes.`,
+Read the \`SKILL.md\` resource for full payload examples, Factura A specifics, and AFIP behavior notes.`,
         },
       },
     ],

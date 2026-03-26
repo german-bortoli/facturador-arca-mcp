@@ -68,9 +68,15 @@ export const ColumnsSchema = z.object({
   FECHA_EMISION: z.string().nullish(), // Optional: Invoice issue date in DD/MM/YYYY format
   FACTURA_TIPO: z.string().nullish(), // Optional: "A" | "B" | "C" (default: "C")
   IVA_GRAVADO: z.string().nullish().transform(val => val ? Number(val) : undefined), // Optional: percentage (default: 100)
-  IVA_EXCEMPT: z.string().nullish().transform(val => val ? Number(val) : undefined), // Optional: percentage (default: 0)
+  IVA_EXCEMPT: z.string().nullish().transform(val => {
+    if (!val) return undefined;
+    const trimmed = val.trim().toLowerCase();
+    if (trimmed === 'true' || trimmed === 'si' || trimmed === 'yes') return 100;
+    if (trimmed === 'false' || trimmed === 'no') return 0;
+    return Number(val) || undefined;
+  }),
   IVA_PERCENTAGE: z.string().nullish().transform(val => val ? Number(val) : undefined), // Optional: tax rate (default: 21)
-  IVA_RECEIVER: z.string().nullish().transform(val => val ? Number(val) : undefined), // Optional: condition code 1-16 (default: 6)
+  IVA_RECEIVER: z.string().nullish().transform(val => val?.trim() || undefined), // Optional: numeric code 1-16 or text label (e.g. "IVA Responsable Inscripto")
   FECHA_SERVICIO_DESDE: z.string().nullish().transform(parseOptionalDate), // Optional: Service period start date (DD/MM/YYYY or YYYY-MM-DD)
   FECHA_SERVICIO_HASTA: z.string().nullish().transform(parseOptionalDate), // Optional: Service period end date (DD/MM/YYYY or YYYY-MM-DD)
   FECHA_VTO_PAGO: z.string().nullish().transform(parseOptionalDate), // Optional: Payment due date (DD/MM/YYYY or YYYY-MM-DD)

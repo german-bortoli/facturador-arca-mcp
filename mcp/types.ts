@@ -26,6 +26,12 @@ export interface EmitInvoiceInput {
   now?: boolean;
   debug?: boolean;
   /**
+   * AFIP login URL. Defaults to the Monotributo login.
+   * Use "https://auth.afip.gob.ar/contribuyente_/login.xhtml?action=SYSTEM&system=rcel"
+   * for Responsable Inscripto taxpayers who don't use the Monotributo portal.
+   */
+  loginUrl?: string;
+  /**
    * Base URL (without port) of this server, e.g. "http://localhost".
    * When provided, emit_invoice returns a downloadUrl for each generated PDF.
    * Falls back to the INVOICE_SERVER_HOST env var when omitted.

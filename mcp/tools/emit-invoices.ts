@@ -101,7 +101,7 @@ export async function emitInvoice(input: EmitInvoiceInput) {
       const context = await browser.newContext();
       await context.tracing.start({ screenshots: true, snapshots: true });
       const page = await context.newPage();
-      const facturadorPage = await navigateToFacturadorPage(page);
+      const facturadorPage = await navigateToFacturadorPage(page, input.loginUrl);
 
       facturadorPage.on('dialog', async (dialog) => {
         await dialog.accept();

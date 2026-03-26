@@ -39,7 +39,7 @@ describe('legacy invoice CSV parser', () => {
     const parsed = parseLegacyInvoiceCsvText(csv);
     expect(parsed.invalid.length).toBe(0);
     expect(parsed.valid.length).toBe(1);
-    expect(parsed.valid[0]!.IVA_RECEIVER).toBe(1);
+    expect(parsed.valid[0]!.IVA_RECEIVER).toBe('1');
     expect(parsed.valid[0]!.METODO_PAGO).toBe('Transferencia bancaria');
   });
 });

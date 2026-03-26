@@ -124,13 +124,32 @@ export function parseInvoiceType(
   return z.enum(['A', 'B', 'C']).parse(type.toUpperCase().trim());
 }
 
+const IVA_RECEIVER_LABEL_MAP: Record<string, number> = {
+  'IVA RESPONSABLE INSCRIPTO': 1,
+  'RESPONSABLE INSCRIPTO': 1,
+  'IVA SUJETO EXENTO': 4,
+  'SUJETO EXENTO': 4,
+  'CONSUMIDOR FINAL': 5,
+  'RESPONSABLE MONOTRIBUTO': 6,
+  'MONOTRIBUTO': 6,
+  'SUJETO NO CATEGORIZADO': 7,
+  'PROVEEDOR EXTERIOR': 8,
+  'CLIENTE EXTERIOR': 9,
+  'IVA LIBERADO LEY 19640': 10,
+  'MONOTRIBUTISTA SOCIAL': 13,
+  'IVA NO ALCANZADO': 15,
+  'MONOTRIBUTO TRABAJADOR INDEPENDIENTE PROMOVIDO': 16,
+};
+
 /**
- * Parse IVA receiver condition code with validation
- * @param code - IVA receiver code (string or number)
+ * Parse IVA receiver condition code with validation.
+ * Accepts numeric codes (1-16) or Spanish text labels (e.g. "IVA Responsable Inscripto").
+ * @param code - IVA receiver code (string, number, or text label)
  * @param defaultValue - Default value if invalid
  * @returns Validated code (1-16)
  * @example
  * parseIvaReceiverCode("6", 6) // 6
+ * parseIvaReceiverCode("IVA Responsable Inscripto", 6) // 1
  * parseIvaReceiverCode("25", 6) // 6 (invalid, returns default)
  */
 export function parseIvaReceiverCode(
@@ -141,13 +160,22 @@ export function parseIvaReceiverCode(
     return defaultValue;
   }
 
-  const parsed = typeof code === 'number' ? code : parseInt(String(code), 10);
-
-  if (isNaN(parsed) || parsed < 1 || parsed > 16) {
-    return defaultValue;
+  if (typeof code === 'number') {
+    return (code >= 1 && code <= 16) ? code : defaultValue;
   }
 
-  return parsed;
+  const trimmed = String(code).trim();
+  const parsed = parseInt(trimmed, 10);
+  if (!isNaN(parsed) && parsed >= 1 && parsed <= 16) {
+    return parsed;
+  }
+
+  const normalized = trimmed
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase();
+  const matched = IVA_RECEIVER_LABEL_MAP[normalized];
+  return matched ?? defaultValue;
 }
 
 /**

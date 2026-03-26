@@ -93,9 +93,9 @@ export function mapInvoiceData<T extends Columns>(
   const invoiceType = parseInvoiceType(
     row.FACTURA_TIPO ?? 'C'
   );
-  const ivaGravado = parsePercentage(row.IVA_GRAVADO, 100);
   const ivaExempt = parsePercentage(row.IVA_EXCEMPT, 0);
-  const ivaPercentage = parsePercentage(row.IVA_PERCENTAGE, 21);
+  const ivaGravado = parsePercentage(row.IVA_GRAVADO, ivaExempt > 0 ? (100 - ivaExempt) : 100);
+  const ivaPercentage = parsePercentage(row.IVA_PERCENTAGE, ivaExempt >= 100 ? 0 : 21);
 
   const ivaReceiver = parseIvaReceiverCode(
     row.IVA_RECEIVER,

@@ -2,10 +2,12 @@ import type { Page } from 'playwright';
 import type { Expense } from './interfaces';
 import { DateTime } from 'luxon';
 
-const LOGIN_SUFFIX = '/contribuyente_/login.xhtml?action=SYSTEM&system=admin_mono';
+const LOGIN_SUFFIX_MONO = '/contribuyente_/login.xhtml?action=SYSTEM&system=admin_mono';
+const LOGIN_SUFFIX_RCEL = '/contribuyente_/login.xhtml?action=SYSTEM&system=rcel';
 const BASE_URL = 'https://auth.afip.gob.ar/';
 const PORTAL_MONOTRIBUTO_URL = 'https://monotributo.afip.gob.ar/app/Inicio.aspx';
 const PORTAL_GENERAL_URL = 'https://portalcf.cloud.afip.gob.ar/portal/app/';
+const FACTURADOR_BASE_URL = 'https://fe.afip.gob.ar/rcel/';
 
 export const addExpensesDataToInvoice = async (
   page: Page,
@@ -97,7 +99,10 @@ export const logInUser = async (page: Page) => {
   ]);
 };
 
-export const navigateToFacturadorPage = async (page: Page, originUrl = BASE_URL + LOGIN_SUFFIX) => {
+export const navigateToFacturadorPage = async (
+  page: Page,
+  originUrl = BASE_URL + LOGIN_SUFFIX_MONO,
+) => {
   const issuerCuit = process.env.AFIP_ISSUER_CUIT;
   if (!issuerCuit) {
     throw new Error('AFIP_ISSUER_CUIT is required');
@@ -115,28 +120,35 @@ export const navigateToFacturadorPage = async (page: Page, originUrl = BASE_URL 
     }
   };
 
-  const url = await page.url();
+  const currentUrl = await page.url();
 
+  // RI flow: after login with system=rcel, AFIP redirects directly to
+  // the facturador (fe.afip.gob.ar). Skip the Monotributo portal entirely.
+  if (currentUrl.includes(FACTURADOR_BASE_URL)) {
+    await page.getByRole('button', { name: process.env.RAZON_SOCIAL! }).click();
+    return page;
+  }
+
+  // Monotributo flow: navigate through the Monotributo portal.
   let portalMonotributoPage: Page = page;
-  if (url.includes(PORTAL_GENERAL_URL)) {
-    // await page.locator('span:has-text("Mis Servicios")').click();
+  if (currentUrl.includes(PORTAL_GENERAL_URL)) {
     const [_portalMonotributoPage] = await Promise.all([
       page.waitForEvent('popup'),
       page.locator('h3:has-text("Monotributo")').click(),
     ]);
     portalMonotributoPage = _portalMonotributoPage;
-    const url = await portalMonotributoPage.url();
-    if (url.includes('https://monotributo.afip.gob.ar/app/SelecRepresentado.aspx')) {
+    const portalUrl = await portalMonotributoPage.url();
+    if (portalUrl.includes('https://monotributo.afip.gob.ar/app/SelecRepresentado.aspx')) {
       await portalMonotributoPage
         .locator(`//a[@usr="${issuerCuit}"]`)
         .click();
     }
   }
 
-  // Url to beign issuing 
   await portalMonotributoPage.waitForURL((url) => {
     const ALLOWED_URLS = [
       'https://monotributo.afip.gob.ar/app/Admin/vRut.aspx',
+      'https://monotributo.afip.gob.ar/app/Admin/Inicio.aspx',
       PORTAL_MONOTRIBUTO_URL
     ]
     return ALLOWED_URLS.some(allowedUrl => url.href.includes(allowedUrl));
@@ -156,8 +168,6 @@ export const navigateToFacturadorPage = async (page: Page, originUrl = BASE_URL 
       { timeout: 15000 }
     );
   } catch (e) {
-    // If the authed page is not found, then it means that use is not authenticated so should login.
-    // Afip started to share session between popups apparently.
     await logInUser(facturadorPage);
   }
 
