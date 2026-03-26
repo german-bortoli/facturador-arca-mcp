@@ -17,7 +17,8 @@ import {
   getCurrentDefaultCode,
 } from './functions';
 import { mapInvoiceData } from './mappers/invoice-mapper';
-import { DOCUMENT_TYPES } from './types/invoice';
+import { DOCUMENT_TYPES, INVOICE_TYPES } from './types/invoice';
+import type { AfipInvoiceData } from './types/invoice';
 
 interface SelectOptionItem {
   index: number;
@@ -441,23 +442,33 @@ export class InvoiceIssuer {
 
     await this.selectAssociatedActivityIfPresent();
 
+    const serviceFrom = inv.FECHA_SERVICIO_DESDE
+      ? DateTime.fromJSDate(inv.FECHA_SERVICIO_DESDE).toFormat('dd/MM/yyyy') as `${string}/${string}/${string}`
+      : getPeriodFromDate(date);
+    const serviceTo = inv.FECHA_SERVICIO_HASTA
+      ? DateTime.fromJSDate(inv.FECHA_SERVICIO_HASTA).toFormat('dd/MM/yyyy') as `${string}/${string}/${string}`
+      : getPeriodToDate(date);
+    const paymentDue = inv.FECHA_VTO_PAGO
+      ? DateTime.fromJSDate(inv.FECHA_VTO_PAGO).toFormat('dd/MM/yyyy') as `${string}/${string}/${string}`
+      : getPeriodToDate(date);
+
     const fromDateInput = this.page.locator(
       'input[name="periodoFacturadoDesde"]',
     );
     await fromDateInput.fill('');
-    await fromDateInput.fill(getPeriodFromDate(date));
+    await fromDateInput.fill(serviceFrom);
 
     const toDateInput = this.page.locator(
       'input[name="periodoFacturadoHasta"]',
     );
     await toDateInput.fill('');
-    await toDateInput.fill(getPeriodToDate(date));
+    await toDateInput.fill(serviceTo);
 
     const deadlineDateInput = this.page.locator(
       'input[name="vencimientoPago"]',
     );
     await deadlineDateInput.fill('');
-    await deadlineDateInput.fill(getPeriodToDate(date));
+    await deadlineDateInput.fill(paymentDue);
 
     await this.page.locator('text=Continuar >').click();
     await this.failFastOnKnownDateValidationError();
@@ -484,8 +495,16 @@ export class InvoiceIssuer {
       await ivaReceiverSelect.selectOption({ index: ivaOptions[0]!.index });
     }
 
-    await this.selectReceiverDocumentType(documentType, inv.TIPO_DOCUMENTO);
+    const docTypeSelectExists = await this.page
+      .locator('select[name="idTipoDocReceptor"]')
+      .count() > 0;
+
+    if (docTypeSelectExists) {
+      await this.selectReceiverDocumentType(documentType, inv.TIPO_DOCUMENTO);
+    }
+
     const receiverDocInput = this.page.locator('input[name="nroDocReceptor"]').first();
+    await receiverDocInput.waitFor({ state: 'visible', timeout: 10_000 });
     await receiverDocInput.fill(inv.NUMERO);
     await this.triggerReceiverDocumentBlur(receiverDocInput);
 
@@ -510,6 +529,8 @@ export class InvoiceIssuer {
       amount: invoiceData.CantReg.toString() || '1',
       value: inv.TOTAL,
     });
+
+    await this.selectLineItemIvaType(invoiceData);
     await this.page.keyboard.press('Tab');
     await sleep(this.page, 100);
 
@@ -688,6 +709,31 @@ export class InvoiceIssuer {
       await activitySelect.selectOption({ index: options[0]!.index });
     } catch {
       // Activity can be optional or delayed depending on taxpayer profile.
+    }
+  }
+
+  private async selectLineItemIvaType(invoiceData: AfipInvoiceData): Promise<void> {
+    const isFacturaA = invoiceData.CbteTipo === INVOICE_TYPES.FACTURA_A;
+    const isFacturaB = invoiceData.CbteTipo === INVOICE_TYPES.FACTURA_B;
+    if (!isFacturaA && !isFacturaB) return;
+
+    const ivaSelect = this.page.locator(
+      'select[name="detalleTipoIVA"], select[id="detalleTipoIVA"], select[name="detalleIVA"], select[id="detalleIVA"]',
+    ).first();
+    const selectExists = await ivaSelect.count() > 0;
+    if (!selectExists) return;
+
+    await ivaSelect.waitFor({ state: 'visible', timeout: 5_000 });
+
+    const isExempt = invoiceData.ImpOpEx > 0 && invoiceData.ImpIVA === 0;
+    if (isExempt) {
+      const options = await this.waitForSelectableOptions(ivaSelect, 5_000);
+      const exemptOption = options.find((o) =>
+        o.text.toLowerCase().includes('exento'),
+      );
+      if (exemptOption) {
+        await ivaSelect.selectOption({ index: exemptOption.index });
+      }
     }
   }
 

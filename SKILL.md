@@ -9,9 +9,16 @@ description: Calls the facturador MCP to validate and emit AFIP invoices when th
 
 Use this skill to process invoice input files and call the project MCP tools:
 
+### Invoice tools
 - `validate_credentials_source` for credential resolution check
 - `dry_run_csv` for validation only
 - `emit_invoice` for real emission
+
+### Client store tools
+- `store_client` to persist AFIP credentials and points of sale in local SQLite
+- `list_clients` to list all stored clients (masked credentials)
+- `update_client` to partially update a stored client
+- `delete_client` to remove a stored client
 
 The MCP expects `invoiceCsvText` in the project legacy CSV format.
 
@@ -25,6 +32,8 @@ Apply this skill when the user:
 - shares AFIP credentials and asks to emit invoices
 - asks to validate invoice rows before emission
 - asks to run the facturador MCP flow end-to-end
+- asks to store, list, update, or delete a client
+- asks to save AFIP credentials for reuse
 
 ## Required Inputs
 
@@ -35,11 +44,9 @@ Collect or confirm:
    - Excel file (`.xlsx`)
    - PDF invoice (previous AFIP invoice used as reference)
    - Screenshot or image of a bank receipt, transfer, or billing document
-2. Credentials:
-   - `AFIP_USERNAME`
-   - `AFIP_PASSWORD`
-   - `AFIP_ISSUER_CUIT`
-   - `RAZON_SOCIAL`
+2. Credentials (one of):
+   - **Stored client**: pass `issuerCuit` to load credentials from SQLite (saved via `store_client`). Use `list_clients` to check available clients.
+   - **Explicit**: `AFIP_USERNAME`, `AFIP_PASSWORD`, `AFIP_ISSUER_CUIT`, `RAZON_SOCIAL`
 3. Run mode:
    - validation only (`dry_run_csv`), or
    - real emission (`emit_invoice`)
@@ -49,8 +56,73 @@ Optional run settings:
 - `headless` (default `true`)
 - `now`
 - `retry`
-- `pointOfSale`
+- `pointOfSale` (auto-selected from stored client POS when omitted)
 - `debug`
+- `loginUrl` (use `system=rcel` URL for Responsable Inscripto taxpayers)
+
+---
+
+## Client Store
+
+The client store persists AFIP credentials and points of sale in local SQLite (`client_store.db`). Passwords are encrypted with `CLIENT_STORE_SECRET_KEY`. Once stored, credentials can be loaded by `issuerCuit` across all credential-accepting tools.
+
+### Store a new client
+
+```json
+{
+  "AFIP_USERNAME": "20999888776",
+  "AFIP_PASSWORD": "my-password",
+  "AFIP_ISSUER_CUIT": "20999888776",
+  "businessName": "My Company SRL",
+  "pointsOfSale": ["1", "3"],
+  "defaultPointOfSale": "1"
+}
+```
+
+### List stored clients
+
+Call `list_clients` with no arguments. Returns masked credentials and POS data for all clients.
+
+### Update a client (partial)
+
+Only provide the fields you want to change. The client must already exist.
+
+```json
+{
+  "AFIP_ISSUER_CUIT": "20999888776",
+  "AFIP_PASSWORD": "new-password",
+  "pointsOfSale": ["1", "3", "5"]
+}
+```
+
+### Delete a client
+
+```json
+{
+  "AFIP_ISSUER_CUIT": "20999888776"
+}
+```
+
+### Credential resolution priority
+
+When `emit_invoice` or `validate_credentials_source` resolves credentials:
+
+1. Explicit `credentials` object (highest priority)
+2. `credentialsCsvText`
+3. SQLite stored client (by `issuerCuit`)
+4. Interactive prompt (if enabled, lowest priority)
+
+### Using stored clients with emit_invoice
+
+```json
+{
+  "invoiceCsvText": "<csv-text>",
+  "issuerCuit": "20999888776",
+  "now": true
+}
+```
+
+When `pointOfSale` is omitted, the system auto-selects `defaultPointOfSale` or the first stored POS.
 
 ---
 
@@ -63,35 +135,51 @@ When the user provides a PDF or image instead of a CSV, extract the fields by re
 | CSV field | Where to find it in the document |
 |---|---|
 | `MES` | Month name of the billing period (e.g. `MARZO`, `ABRIL`). If unclear, use the month of `FECHA`. |
-| `COMPROBANTE` | Invoice type printed on the document: `Factura C`, `Factura A`, `Factura B`, etc. |
+| `COMPROBANTE` | Invoice type: `Factura C`, `Factura A`, `Factura B`. Determines the AFIP form flow (see Factura A section below). |
 | `NRO_COMP` | "Punto de Venta: Comp. Nro" — format as `XXXXX-XXXXXXXXX` (e.g. `00002-00000115`). Leave blank if not available. |
 | `FECHA` | Emission date in `DD/MM/YYYY` format. Found as "Fecha de Emisión". |
-| `CONCEPTO` | Description of the service or product. Usually the item description line (e.g. `Desarrollo de software`, `Servicio de programacion de software`). |
+| `CONCEPTO` | Description of the service or product. Usually the item description line. |
 | `SERVICIOS` | Legacy optional field. Keep empty by default unless the user explicitly provides/requests it. |
-| `FORMA_DE_PAGO` | Payment condition printed as "Condición de venta" (e.g. `Transferencia Bancaria`, `Contado`). |
-| `TOTAL` | "Importe Total" — the grand total amount. |
-| `PAGADOR` | "Apellido y Nombre / Razón Social" of the receiver/client (e.g. `PEREZ JUAN`, `EMPRESA COPADA SRL`). |
+| `FORMA_DE_PAGO` | Payment condition (e.g. `Transferencia Bancaria`, `Contado`). |
+| `TOTAL` | "Importe Total" — the grand total amount. For IVA-exempt Factura A, this equals the net amount. |
+| `PAGADOR` | "Apellido y Nombre / Razón Social" of the receiver/client. |
 | `TIPO_DOC` | Document type of the receiver. Use `CUIT` when a CUIT is shown. Use `DNI` only when only a DNI is shown. |
-| `DOCUMENTO` | The CUIT or DNI number of the receiver. Found after "CUIT:" in the receiver section. |
+| `DOCUMENTO` | The CUIT or DNI number of the receiver. |
 | `DIRECCION` | Receiver's address. Found as "Domicilio" in the receiver section. |
-| `CONDICION_IVA_RECEPTOR` | IVA condition of the receiver (see codes table below). Found as "Condición frente al IVA" in the receiver section. |
+| `CONDICION_IVA_RECEPTOR` | IVA condition of the receiver. Accepts numeric codes or text labels (see table below). |
+| `PERIODO_DESDE` | Service period start date in `DD/MM/YYYY`. Alias for `FECHA_SERVICIO_DESDE`. If omitted, auto-calculated from `FECHA`. |
+| `PERIODO_HASTA` | Service period end date in `DD/MM/YYYY`. Alias for `FECHA_SERVICIO_HASTA`. If omitted, auto-calculated from `FECHA`. |
+| `IVA_EXENTO` | Set to `true` for IVA-exempt invoices (Factura A). Accepts `true`/`si`/`yes` or a percentage (e.g. `100`). |
 
 Fields not present in the document (e.g. `MATRICULA`, `HOSPEDAJE`, `SERVICIOS`, `RESIDENTE`) should be left empty.
 `TOTAL` is the authoritative amount for invoice emission.
 
 ### Real examples extracted from reference invoices
 
-**Empresa Copada SRL (Responsable Inscripto):**
+**Factura C — Monotributo to Responsable Inscripto:**
 ```
-MES,COMPROBANTE,NRO_COMP,FECHA,CONCEPTO,SERVICIOS,FORMA_DE_PAGO,TOTAL,PAGADOR,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR
-MARZO,Factura C,00001-00000001,15/03/2026,Desarrollo de software,500,Transferencia Bancaria,500,EMPRESA COPADA SRL,CUIT,30711111119,"Mitre 345, Rosario, Santa Fe",1
+MES,COMPROBANTE,FECHA,CONCEPTO,FORMA_DE_PAGO,TOTAL,PAGADOR,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR
+MARZO,Factura C,15/03/2026,Desarrollo de software,Transferencia Bancaria,500,EMPRESA COPADA SRL,CUIT,30711111119,"Mitre 345, Rosario, Santa Fe",1
 ```
 
-**Juan Perez (Responsable Monotributo):**
+**Factura C — Monotributo to Responsable Monotributo:**
 ```
-MES,COMPROBANTE,NRO_COMP,FECHA,CONCEPTO,SERVICIOS,FORMA_DE_PAGO,TOTAL,PAGADOR,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR
-MARZO,Factura C,00001-00000002,15/03/2026,Servicio de programacion de software,200,Transferencia Bancaria,200,PEREZ JUAN,CUIT,20999999990,"Belgrano 780, Córdoba, Córdoba",6
+MES,COMPROBANTE,FECHA,CONCEPTO,FORMA_DE_PAGO,TOTAL,PAGADOR,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR
+MARZO,Factura C,15/03/2026,Servicio de programacion de software,Transferencia Bancaria,200,PEREZ JUAN,CUIT,20999999990,"Belgrano 780, Córdoba, Córdoba",6
 ```
+
+**Factura A — RI to RI (IVA exempt, with service period):**
+```
+FECHA,PERIODO_DESDE,PERIODO_HASTA,CONCEPTO,TOTAL,PAGADOR,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR,FORMA_DE_PAGO,COMPROBANTE,IVA_EXENTO
+25/03/2026,01/02/2026,28/02/2026,Honorarios profesionales,100000,EMPRESA EJEMPLO SA,CUIT,30999888770,"Av. Corrientes 1234, CABA",IVA Responsable Inscripto,Transferencia Bancaria,Factura A,true
+```
+
+**Factura A — RI to RI (with 21% IVA):**
+```
+FECHA,PERIODO_DESDE,PERIODO_HASTA,CONCEPTO,TOTAL,PAGADOR,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR,FORMA_DE_PAGO,COMPROBANTE
+25/03/2026,01/02/2026,28/02/2026,Servicios de consultoría,100000,EMPRESA EJEMPLO SA,CUIT,30999888770,"Av. Corrientes 1234, CABA",IVA Responsable Inscripto,Transferencia Bancaria,Factura A
+```
+Note: without `IVA_EXENTO=true`, Factura A defaults to 21% IVA. The `TOTAL` in this case is the net amount; AFIP adds IVA on top.
 
 ### When extracting from a bank receipt / screenshot
 
@@ -121,24 +209,47 @@ Present a summary of extracted fields and ask the user to confirm before running
 
 ## Workflow
 
-Copy this checklist and execute in order:
+**CRITICAL — Credential resolution before emit_invoice or validate_credentials_source:**
+
+1. **ALWAYS** call `list_clients` first.
+2. If the response contains clients → use the matching `issuerCuit` **exactly as returned by `list_clients`**. Ask the user which client/point of sale if ambiguous.
+3. If no stored clients exist → ask the user for AFIP credentials (`AFIP_USERNAME`, `AFIP_PASSWORD`, `AFIP_ISSUER_CUIT`, `RAZON_SOCIAL`) and pass them as the `credentials` object.
+4. **NEVER** call `emit_invoice` or `validate_credentials_source` without providing either `issuerCuit` or `credentials`.
+5. **NEVER** set `allowInteractivePrompt` to `true`.
+
+**WARNING — Do NOT confuse `issuerCuit` with `DOCUMENTO`:**
+- `issuerCuit` = the CUIT of the business **issuing** the invoice (your AFIP login). Get it from `list_clients`.
+- `DOCUMENTO` = the CUIT/DNI of the **receiver/client** being invoiced (appears in the CSV data).
+- These are two different entities. Never use the receiver's CUIT as `issuerCuit`.
+
+Execute these steps in order:
 
 ```text
 MCP Invoice Workflow
+- [ ] Call list_clients to check for stored clients
+- [ ] Resolve credentials: use issuerCuit (stored) or ask the user for explicit credentials
 - [ ] Extract or receive invoice data (CSV, XLSX, PDF, or image)
 - [ ] Map extracted fields to legacy CSV format
 - [ ] Ask user to confirm or fill in any missing fields
-- [ ] Validate credentials source first
-- [ ] Run dry_run_csv first
-- [ ] If valid rows exist and user confirms, run emit_invoice
+- [ ] Validate credentials source (with issuerCuit or credentials object)
+- [ ] Run dry_run_csv to validate invoice data
+- [ ] If valid rows exist and user confirms, run emit_invoice (with issuerCuit or credentials object)
 - [ ] Return structured result (success, failed, tracePath)
 - [ ] If issued[].downloadUrl is present, render download links
 ```
 
 ### 1) Validate credentials source
 
-Call `validate_credentials_source` before processing invoices:
+Call `validate_credentials_source` before processing invoices.
 
+**With stored client:**
+```json
+{
+  "issuerCuit": "20999888776"
+}
+```
+
+**With explicit credentials:**
 ```json
 {
   "credentials": {
@@ -153,11 +264,13 @@ Call `validate_credentials_source` before processing invoices:
 
 If validation fails, stop and ask the user to correct credentials.
 
-Credential fallback mode:
+Credential resolution priority:
 
-- Preferred: explicit `credentials` object.
-- Fallback: `credentialsCsvText` with optional `preferredIssuerCuit`.
-- Last resort: `allowInteractivePrompt: true` only when an interactive session is available.
+1. Explicit `credentials` object.
+2. `credentialsCsvText` with optional `preferredIssuerCuit`.
+3. Stored client via `issuerCuit`.
+
+**WARNING**: Never set `allowInteractivePrompt` to `true` when running as an MCP server — it will break the stdio transport. Always provide `issuerCuit` or `credentials` explicitly.
 
 ### 2) Normalize input to legacy CSV text
 
@@ -169,7 +282,7 @@ The MCP input field is always `invoiceCsvText`.
 
 Full legacy header contract:
 
-`MES,COMPROBANTE,NRO_COMP,FECHA,CONCEPTO,MATRICULA,HOSPEDAJE,SERVICIOS,FORMA_DE_PAGO,TOTAL,PAGADOR,RESIDENTE,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR`
+`MES,COMPROBANTE,NRO_COMP,FECHA,CONCEPTO,MATRICULA,HOSPEDAJE,SERVICIOS,FORMA_DE_PAGO,TOTAL,PAGADOR,RESIDENTE,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR,PERIODO_DESDE,PERIODO_HASTA,IVA_EXENTO`
 
 ### 3) Validate invoices first
 
@@ -185,8 +298,20 @@ If `invalidCount > 0`, present invalid rows and stop unless user asks to continu
 
 ### 4) Emit only after confirmation
 
-Call `emit_invoice` with:
+Call `emit_invoice`.
 
+**With stored client:**
+```json
+{
+  "invoiceCsvText": "<legacy-csv-text>",
+  "issuerCuit": "20999888776",
+  "headless": true,
+  "now": true,
+  "retry": false
+}
+```
+
+**With explicit credentials:**
 ```json
 {
   "invoiceCsvText": "<legacy-csv-text>",
@@ -244,6 +369,16 @@ If `downloadUrl` is absent (server not configured), still report `artifactPath` 
 - For DNI flows, AFIP UI may force IVA receiver condition to Consumidor Final.
 - For Monotributo/RI flows, prefer `TIPO_DOC=CUIT` and use `CONDICION_IVA_RECEPTOR` accordingly.
 
+### Factura A specifics
+
+Factura A is used between Responsable Inscripto (RI) taxpayers. Key differences from Factura C:
+
+1. **Login URL**: RI taxpayers must use `loginUrl: "https://auth.afip.gob.ar/contribuyente_/login.xhtml?action=SYSTEM&system=rcel"` to go directly to "Comprobantes en línea" instead of the Monotributo portal.
+2. **No document type selector**: Factura A always uses CUIT. The form shows the CUIT input directly without a document type dropdown.
+3. **IVA on line items**: Factura A shows an IVA type dropdown per line item. By default it's 21%. Pass `IVA_EXENTO=true` in the CSV to select "Exento" (total = net, no IVA added).
+4. **Service period dates**: Use `PERIODO_DESDE` and `PERIODO_HASTA` (or `FECHA_SERVICIO_DESDE`/`FECHA_SERVICIO_HASTA`) to set the service period explicitly. If omitted, the period is auto-calculated from the invoice date.
+5. **Payment method**: Factura A uses checkboxes for payment method instead of a dropdown (the code handles both automatically).
+
 ## IVA Receiver Condition Codes (`CONDICION_IVA_RECEPTOR`)
 
 Accepted aliases for this header:
@@ -253,18 +388,33 @@ Accepted aliases for this header:
 - `IVA_RECEPTOR`
 - `IVA_RECEIVER` (backward compatibility)
 
-Supported codes:
+Both numeric codes and Spanish text labels are accepted:
 
-| Code | IVA condition label |
+| Code | Accepted text labels |
 |---|---|
-| `1` | Responsable inscripto |
-| `4` | Sujeto exento |
-| `5` | Consumidor final |
-| `6` | Responsable monotributo |
-| `7` | Sujeto no categorizado |
-| `8` | Proveedor exterior |
-| `9` | Cliente exterior |
-| `10` | IVA liberado Ley 19640 |
-| `13` | Monotributista social |
-| `15` | IVA no alcanzado |
-| `16` | Monotributo trabajador independiente promovido |
+| `1` | `IVA Responsable Inscripto`, `Responsable Inscripto` |
+| `4` | `IVA Sujeto Exento`, `Sujeto Exento` |
+| `5` | `Consumidor Final` |
+| `6` | `Responsable Monotributo`, `Monotributo` |
+| `7` | `Sujeto No Categorizado` |
+| `8` | `Proveedor Exterior` |
+| `9` | `Cliente Exterior` |
+| `10` | `IVA Liberado Ley 19640` |
+| `13` | `Monotributista Social` |
+| `15` | `IVA No Alcanzado` |
+| `16` | `Monotributo Trabajador Independiente Promovido` |
+
+Text labels are case-insensitive and accent-insensitive.
+
+## Login URL for Responsable Inscripto (`loginUrl`)
+
+By default, the facturador logs in through the Monotributo portal (`system=admin_mono`).
+For Responsable Inscripto taxpayers who don't use the Monotributo portal, pass `loginUrl` to use the direct "Comprobantes en línea" entry point:
+
+```json
+{
+  "loginUrl": "https://auth.afip.gob.ar/contribuyente_/login.xhtml?action=SYSTEM&system=rcel"
+}
+```
+
+This skips the Monotributo portal navigation and goes directly to `fe.afip.gob.ar` after login.

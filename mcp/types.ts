@@ -11,6 +11,8 @@ export interface EmitInvoiceInput {
   credentials?: CredentialInput;
   allowInteractivePrompt?: boolean;
   preferredIssuerCuit?: string;
+  /** Load credentials from SQLite by issuer CUIT (no need to pass credentials explicitly). */
+  issuerCuit?: string;
   headless?: boolean | string;
   slowMoMs?: number;
   retry?: boolean;
@@ -23,6 +25,12 @@ export interface EmitInvoiceInput {
   addMonthToConcept?: boolean;
   now?: boolean;
   debug?: boolean;
+  /**
+   * AFIP login URL. Defaults to the Monotributo login.
+   * Use "https://auth.afip.gob.ar/contribuyente_/login.xhtml?action=SYSTEM&system=rcel"
+   * for Responsable Inscripto taxpayers who don't use the Monotributo portal.
+   */
+  loginUrl?: string;
   /**
    * Base URL (without port) of this server, e.g. "http://localhost".
    * When provided, emit_invoice returns a downloadUrl for each generated PDF.
@@ -42,6 +50,10 @@ export type DryRunLegacyCsvInput = DryRunCsvInput;
 export interface ValidateCredentialsSourceInput {
   credentialsCsvText?: string;
   credentials?: CredentialInput;
+  issuerCuit?: string;
   allowInteractivePrompt?: boolean;
   preferredIssuerCuit?: string;
 }
+
+export type { StoreClientToolInput } from './tools/store-client';
+
