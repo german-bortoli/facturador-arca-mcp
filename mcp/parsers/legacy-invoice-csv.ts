@@ -1,6 +1,10 @@
 import { parse } from 'csv-parse/sync';
 import { DateTime } from 'luxon';
-import { ColumnsSchema, type Columns } from '../../types/file';
+import { ColumnsSchema, parseIvaExentoValue, type Columns } from '../../types/file';
+import {
+  resolveIvaReceiverCode,
+  VALID_IVA_RECEIVER_CODES,
+} from '../../utils/data-cleaner';
 
 const LEGACY_HEADER_ALIASES: Record<string, string> = {
   MES: 'MES',
@@ -32,8 +36,9 @@ const LEGACY_HEADER_ALIASES: Record<string, string> = {
   PERIODOHASTA: 'FECHA_SERVICIO_HASTA',
   FECHAVTOPAGO: 'FECHA_VTO_PAGO',
   IVAGRAVADO: 'IVA_GRAVADO',
-  IVAEXCEMPT: 'IVA_EXCEMPT',
-  IVAEXENTO: 'IVA_EXCEMPT',
+  IVAEXCEMPT: 'IVA_EXENTO',
+  IVAEXEMPT: 'IVA_EXENTO',
+  IVAEXENTO: 'IVA_EXENTO',
   IVAPERCENTAGE: 'IVA_PERCENTAGE',
   PORCENTAJEIVA: 'IVA_PERCENTAGE',
   ALICUOTAIVA: 'IVA_PERCENTAGE',
@@ -44,6 +49,20 @@ const LEGACY_HEADER_ALIASES: Record<string, string> = {
   FACTURATIPO: 'FACTURA_TIPO',
 };
 
+/**
+ * Schema-canonical header names accepted as FALLBACK aliases only: they apply
+ * when the legacy canonical header is absent. Applying them unconditionally
+ * would let e.g. a NUMERO column (often the comprobante number in legacy
+ * files) silently overwrite the receiver DOCUMENTO.
+ */
+const LEGACY_FALLBACK_ALIASES: Record<string, string> = {
+  NUMERO: 'DOCUMENTO',
+  DOMICILIO: 'DIRECCION',
+  FECHAEMISION: 'FECHA',
+  VENCIMIENTOPAGO: 'FECHA_VTO_PAGO',
+  CONDICIONVENTA: 'METODO_PAGO',
+};
+
 const REQUIRED_LEGACY_HEADERS = ['TOTAL', 'PAGADOR', 'TIPO_DOC', 'DOCUMENTO'] as const;
 
 export interface LegacyInvoiceParseError {
@@ -52,9 +71,19 @@ export interface LegacyInvoiceParseError {
   row: Record<string, unknown>;
 }
 
+export interface LegacyInvoiceParseWarning {
+  /** 1-based CSV line (header = 1). Null for file-level warnings. */
+  rowNumber: number | null;
+  message: string;
+}
+
 export interface LegacyInvoiceParseResult {
   valid: Columns[];
+  /** 1-based CSV line of each valid row (header = 1), parallel to `valid`. */
+  validRowNumbers: number[];
   invalid: LegacyInvoiceParseError[];
+  /** Non-fatal notes: values that will be defaulted, corrected or ignored. */
+  warnings: LegacyInvoiceParseWarning[];
 }
 
 function normalizeHeader(value: string): string {
@@ -68,12 +97,56 @@ function normalizeHeader(value: string): string {
 
 function mapLegacyRowKeys(row: Record<string, unknown>): Record<string, unknown> {
   const mapped: Record<string, unknown> = {};
+  const fallbacks: Array<[string, unknown]> = [];
   for (const [key, value] of Object.entries(row)) {
     const normalized = normalizeHeader(key);
+    const fallbackTarget = LEGACY_FALLBACK_ALIASES[normalized];
+    if (fallbackTarget !== undefined && LEGACY_HEADER_ALIASES[normalized] === undefined) {
+      fallbacks.push([fallbackTarget, value]);
+      mapped[normalized] = value;
+      continue;
+    }
     const mappedHeader = LEGACY_HEADER_ALIASES[normalized] ?? normalized;
     mapped[mappedHeader] = value;
   }
+  // Fallback aliases never overwrite a value provided by a canonical header.
+  for (const [target, value] of fallbacks) {
+    if (mapped[target] === undefined) {
+      mapped[target] = value;
+    }
+  }
   return mapped;
+}
+
+/**
+ * File-level warnings for headers whose fallback alias is ignored because the
+ * canonical header is also present (e.g. NUMERO alongside DOCUMENTO).
+ */
+function collectHeaderCollisionWarnings(
+  rawRows: Record<string, unknown>[],
+  warnings: LegacyInvoiceParseWarning[],
+): void {
+  const firstRow = rawRows[0];
+  if (!firstRow) return;
+
+  const normalizedHeaders = Object.keys(firstRow).map(normalizeHeader);
+  const primaryTargets = new Set(
+    normalizedHeaders
+      .map((header) => LEGACY_HEADER_ALIASES[header])
+      .filter((target): target is string => target !== undefined),
+  );
+
+  for (const header of normalizedHeaders) {
+    const fallbackTarget = LEGACY_FALLBACK_ALIASES[header];
+    if (fallbackTarget !== undefined && primaryTargets.has(fallbackTarget)) {
+      warnings.push({
+        rowNumber: null,
+        message:
+          `La columna "${header}" se ignora porque el archivo ya tiene la columna canónica que mapea a ${fallbackTarget}. ` +
+          'Eliminá una de las dos para evitar ambigüedad.',
+      });
+    }
+  }
 }
 
 function assertRequiredHeaders(rows: Record<string, unknown>[]): void {
@@ -98,13 +171,36 @@ function parseLegacyInvoiceType(rawComprobante: unknown): 'A' | 'B' | 'C' | unde
   return undefined;
 }
 
+/**
+ * Detects comprobante types that AFIP supports but this issuer does not
+ * (credit/debit notes, receipts). These must be a hard row error: silently
+ * issuing them as Factura C would produce a legally different document.
+ */
+function detectUnsupportedComprobante(rawComprobante: string): string | undefined {
+  const normalized = rawComprobante
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    // Collapse separators ('/', '.', '-', spaces) so "N/C", "N.C." and "N-C"
+    // all normalize to "N C".
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .trim();
+
+  if (!normalized) return undefined;
+  if (/\bNOTA (DE )?CREDITO\b/.test(normalized) || /^N ?C\b/.test(normalized)) return 'Nota de Cr\u00e9dito';
+  if (/\bNOTA (DE )?DEBITO\b/.test(normalized) || /^N ?D\b/.test(normalized)) return 'Nota de D\u00e9bito';
+  if (/^RECIBO/.test(normalized)) return 'Recibo';
+  return undefined;
+}
+
 function parseLegacyIssueDate(rawDate: unknown): string | undefined {
   const normalized = String(rawDate ?? '').trim();
   if (!normalized) {
     return undefined;
   }
   if (/^\d{2}\/\d{2}\/\d{4}$/.test(normalized)) {
-    return normalized;
+    // Reject impossible calendar dates (e.g. 31/02/2026) that match the shape.
+    return DateTime.fromFormat(normalized, 'dd/MM/yyyy').isValid ? normalized : undefined;
   }
   if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
     const parsed = DateTime.fromFormat(normalized, 'yyyy-MM-dd');
@@ -151,7 +247,7 @@ function toSchemaInput(mappedRow: Record<string, unknown>): Record<string, unkno
       parseLegacyInvoiceType(mappedRow.COMPROBANTE) ??
       parseLegacyInvoiceType(mappedRow.FACTURA_TIPO),
     IVA_GRAVADO: String(mappedRow.IVA_GRAVADO ?? '').trim() || undefined,
-    IVA_EXCEMPT: String(mappedRow.IVA_EXCEMPT ?? '').trim() || undefined,
+    IVA_EXENTO: String(mappedRow.IVA_EXENTO ?? '').trim() || undefined,
     IVA_PERCENTAGE: String(mappedRow.IVA_PERCENTAGE ?? '').trim() || undefined,
     IVA_RECEIVER: String(mappedRow.IVA_RECEIVER ?? '').trim() || undefined,
     FECHA_SERVICIO_DESDE:
@@ -161,6 +257,120 @@ function toSchemaInput(mappedRow: Record<string, unknown>): Record<string, unkno
     FECHA_VTO_PAGO: parseLegacyIssueDate(mappedRow.FECHA_VTO_PAGO) ?? undefined,
   };
 }
+
+const LEGACY_DATE_FORMAT = 'dd/MM/yyyy';
+
+function toDateTime(displayDate: string | undefined): DateTime | undefined {
+  if (!displayDate) return undefined;
+  const parsed = DateTime.fromFormat(displayDate, LEGACY_DATE_FORMAT);
+  return parsed.isValid ? parsed : undefined;
+}
+
+function collectRowWarnings(
+  mappedRow: Record<string, unknown>,
+  rowNumber: number,
+  warnings: LegacyInvoiceParseWarning[],
+): void {
+  const push = (message: string) => warnings.push({ rowNumber, message });
+  const rawValue = (key: string) => String(mappedRow[key] ?? '').trim();
+
+  const rawComprobante = rawValue('COMPROBANTE') || rawValue('FACTURA_TIPO');
+  if (rawComprobante && parseLegacyInvoiceType(rawComprobante) === undefined) {
+    push(`COMPROBANTE "${rawComprobante}" no reconocido: se emitirá como Factura C (default).`);
+  }
+
+  const rawFecha = rawValue('FECHA');
+  const fecha = parseLegacyIssueDate(rawFecha);
+  if (rawFecha && !fecha) {
+    push(`FECHA "${rawFecha}" inválida (formatos aceptados: DD/MM/YYYY o YYYY-MM-DD): se usará la fecha del run.`);
+  }
+
+  const rawDesde = rawValue('FECHA_SERVICIO_DESDE');
+  const desde = parseLegacyIssueDate(rawDesde);
+  if (rawDesde && !desde) {
+    push(`PERIODO_DESDE "${rawDesde}" inválida: se usará el período del mes de emisión.`);
+  }
+
+  const rawHasta = rawValue('FECHA_SERVICIO_HASTA');
+  const hasta = parseLegacyIssueDate(rawHasta);
+  if (rawHasta && !hasta) {
+    push(`PERIODO_HASTA "${rawHasta}" inválida: se usará el período del mes de emisión.`);
+  }
+
+  const rawVto = rawValue('FECHA_VTO_PAGO');
+  const vto = parseLegacyIssueDate(rawVto);
+  if (rawVto && !vto) {
+    push(`FECHA_VTO_PAGO "${rawVto}" inválida: se usará el último día del mes de emisión.`);
+  }
+
+  const desdeDate = toDateTime(desde);
+  const hastaDate = toDateTime(hasta);
+  if (desdeDate && hastaDate && desdeDate > hastaDate) {
+    push(
+      `Período de servicio invertido (${desde} > ${hasta}): el emisor usará el mes de la fecha de emisión en su lugar.`,
+    );
+  }
+
+  const vtoDate = toDateTime(vto);
+  const fechaDate = toDateTime(fecha);
+  if (vtoDate && fechaDate && vtoDate < fechaDate) {
+    push(
+      `FECHA_VTO_PAGO (${vto}) es anterior a la fecha de emisión (${fecha}): AFIP la rechaza, el emisor usará el último día del mes de emisión.`,
+    );
+  }
+
+  const rawIvaReceiver = rawValue('IVA_RECEIVER');
+  if (rawIvaReceiver) {
+    const resolution = resolveIvaReceiverCode(rawIvaReceiver, 6);
+    if (resolution.source === 'label') {
+      push(
+        `CONDICION_IVA_RECEPTOR "${rawIvaReceiver}" interpretada como código ${resolution.code}. ` +
+        'Verificá que sea la condición correcta del receptor (si querés el default, dejá la columna vacía o usá 6).',
+      );
+    } else if (resolution.source === 'unrecognized') {
+      push(
+        `CONDICION_IVA_RECEPTOR "${rawIvaReceiver}" no reconocida (códigos válidos: ${VALID_IVA_RECEIVER_CODES.join(', ')} o etiquetas como "Consumidor Final"): se usará 6 (Responsable Monotributo).`,
+      );
+    }
+  }
+
+  const rawIvaExento = rawValue('IVA_EXENTO');
+  if (rawIvaExento) {
+    const parsedExento = parseIvaExentoValue(rawIvaExento);
+    if (parsedExento === undefined) {
+      push(`IVA_EXENTO "${rawIvaExento}" no reconocido (use true/false, si/no o un porcentaje): se ignora.`);
+    } else {
+      // Values the pre-2026 transform silently dropped ('sí' with accent,
+      // '100%', '10,5') now take effect and change Factura A amounts.
+      const legacyParsed = ((value: string) => {
+        const trimmed = value.trim().toLowerCase();
+        if (trimmed === 'true' || trimmed === 'si' || trimmed === 'yes') return 100;
+        if (trimmed === 'false' || trimmed === 'no') return 0;
+        return Number(value) || undefined;
+      })(rawIvaExento);
+      // parsedExento === 0 is amount-identical to "not set", so no warning.
+      if (legacyParsed !== parsedExento && parsedExento !== 0) {
+        push(
+          `IVA_EXENTO "${rawIvaExento}" se interpreta como ${parsedExento}% exento. ` +
+          'Versiones anteriores ignoraban este valor (facturaban Factura A con IVA completo): verificá los montos en mapperPreview antes de emitir.',
+        );
+      }
+    }
+  }
+}
+
+const IGNORED_VALUE_COLUMNS: Array<{ column: string; message: string }> = [
+  {
+    column: 'HOSPEDAJE',
+    message:
+      'La columna HOSPEDAJE se acepta pero su valor se IGNORA: el importe facturado sale exclusivamente de TOTAL.',
+  },
+  {
+    column: 'NCOMP',
+    message:
+      'La columna NRO_COMP/NCOMP se acepta pero su valor se ignora (la numeración la asigna AFIP).',
+  },
+];
 
 export function parseLegacyInvoiceCsvText(csvText: string): LegacyInvoiceParseResult {
   if (!csvText || csvText.trim().length === 0) {
@@ -172,28 +382,73 @@ export function parseLegacyInvoiceCsvText(csvText: string): LegacyInvoiceParseRe
     skip_empty_lines: true,
     bom: true,
     cast: false,
-  }) as Record<string, unknown>[];
+    info: true,
+  }) as Array<{ record: Record<string, unknown>; info: { lines: number } }>;
 
-  const mappedRows = parsed.map(mapLegacyRowKeys);
+  const rawRows = parsed.map(({ record }) => record);
+  const rowLines = parsed.map(({ info }) => info.lines);
+  const mappedRows = rawRows.map(mapLegacyRowKeys);
   assertRequiredHeaders(mappedRows);
 
   const valid: Columns[] = [];
+  const validRowNumbers: number[] = [];
   const invalid: LegacyInvoiceParseError[] = [];
+  const warnings: LegacyInvoiceParseWarning[] = [];
+
+  collectHeaderCollisionWarnings(rawRows, warnings);
+
+  for (const { column, message } of IGNORED_VALUE_COLUMNS) {
+    if (mappedRows.some((row) => String(row[column] ?? '').trim().length > 0)) {
+      warnings.push({ rowNumber: null, message });
+    }
+  }
 
   mappedRows.forEach((mappedRow, index) => {
+    const rowNumber = rowLines[index] ?? index + 2;
+
+    const rawComprobante =
+      String(mappedRow.COMPROBANTE ?? '').trim() ||
+      String(mappedRow.FACTURA_TIPO ?? '').trim();
+    const unsupportedType = detectUnsupportedComprobante(rawComprobante);
+    if (unsupportedType) {
+      invalid.push({
+        rowNumber,
+        error:
+          `Tipo de comprobante no soportado: "${rawComprobante}" (${unsupportedType}). ` +
+          'Este emisor solo genera Factura A, B o C; notas de crédito/débito y recibos deben emitirse manualmente en el portal AFIP.',
+        row: mappedRow,
+      });
+      return;
+    }
+
+    collectRowWarnings(mappedRow, rowNumber, warnings);
+
     const schemaInput = toSchemaInput(mappedRow);
-    const result = ColumnsSchema.safeParse(schemaInput);
+    // zod does not catch throws inside transforms (parseAmount on TOTAL), so
+    // guard here to keep one bad cell from aborting the whole parse.
+    let result: ReturnType<typeof ColumnsSchema.safeParse>;
+    try {
+      result = ColumnsSchema.safeParse(schemaInput);
+    } catch (transformError) {
+      invalid.push({
+        rowNumber,
+        error: transformError instanceof Error ? transformError.message : String(transformError),
+        row: mappedRow,
+      });
+      return;
+    }
     if (result.success) {
       valid.push(result.data);
+      validRowNumbers.push(rowNumber);
       return;
     }
 
     invalid.push({
-      rowNumber: index + 2,
+      rowNumber,
       error: result.error.issues.map((issue) => issue.message).join('; '),
       row: mappedRow,
     });
   });
 
-  return { valid, invalid };
+  return { valid, validRowNumbers, invalid, warnings };
 }

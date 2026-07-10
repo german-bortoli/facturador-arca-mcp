@@ -12,12 +12,12 @@ import {
   formatNumber,
   startNewInvoice,
   getInvoiceDescription,
-  getPeriodFromDate,
-  getPeriodToDate,
   getCurrentDefaultCode,
 } from './functions';
+import { resolveServicePeriod } from './utils/service-period';
 import { mapInvoiceData } from './mappers/invoice-mapper';
-import { DOCUMENT_TYPES, INVOICE_TYPES } from './types/invoice';
+import { resolveIvaReceiverCode } from './utils/data-cleaner';
+import { DOCUMENT_TYPES, INVOICE_TYPES, IVA_RECEIVER_CONDITIONS } from './types/invoice';
 import type { AfipInvoiceData } from './types/invoice';
 
 interface SelectOptionItem {
@@ -82,10 +82,39 @@ function classifyFailureCode(error: string): string {
   if (normalized.includes('domicilio')) return 'RECEIVER_ADDRESS';
   if (normalized.includes('puntodeventa')) return 'POINT_OF_SALE';
   if (normalized.includes('idtipodocreceptor') || normalized.includes('document type')) return 'DOCUMENT_TYPE';
+  if (normalized.includes('iva receiver condition')) return 'IVA_CONDITION';
+  if (normalized.includes('did not advance to the receiver step')) return 'RECEIVER_STEP';
   if (normalized.includes('comprobante')) return 'INVOICE_TYPE';
   if (normalized.includes('total values')) return 'TOTAL_MISMATCH';
   return 'UNKNOWN';
 }
+
+/**
+ * Field names as they appear near date-validation messages in RCEL. Used to
+ * anchor the generic problem phrases below so plain form labels (which are
+ * always present in the page body) never produce a false positive.
+ */
+const AFIP_DATE_ERROR_CONTEXTS = [
+  'periodo facturado',
+  'periodo del servicio',
+  'vencimiento para el pago',
+  'vencimiento del pago',
+  'vencimiento de pago',
+  'fecha del comprobante',
+  'fecha de vencimiento',
+] as const;
+
+/** Phrases that only appear inside RCEL validation error sentences. */
+const AFIP_DATE_ERROR_PHRASES = [
+  'no puede ser anterior',
+  'no puede ser posterior',
+  'es invalida',
+  'es invalido',
+  'no es valida',
+  'no es valido',
+  'fuera de rango',
+  'debe estar comprendida',
+] as const;
 
 export function extractAfipDateValidationError(
   pageText: string,
@@ -102,21 +131,37 @@ export function extractAfipDateValidationError(
   const hasInvalidDateMessage = normalized.includes(
     'la fecha del comprobante es invalida',
   );
-  if (!hasInvalidDateMessage) {
-    return undefined;
+  if (hasInvalidDateMessage) {
+    const hasKnownDetail =
+      normalized.includes('es anterior al inicio de actividades') ||
+      normalized.includes(
+        'existen comprobantes emitidos con fecha posterior a la ingresada',
+      );
+
+    if (hasKnownDetail) {
+      return 'AFIP rejected invoice date: La Fecha del Comprobante es invalida (es anterior al Inicio de Actividades o existen comprobantes emitidos con fecha posterior a la ingresada)';
+    }
+
+    return 'AFIP rejected invoice date: La Fecha del Comprobante es invalida';
   }
 
-  const hasKnownDetail =
-    normalized.includes('es anterior al inicio de actividades') ||
-    normalized.includes(
-      'existen comprobantes emitidos con fecha posterior a la ingresada',
-    );
-
-  if (hasKnownDetail) {
-    return 'AFIP rejected invoice date: La Fecha del Comprobante es invalida (es anterior al Inicio de Actividades o existen comprobantes emitidos con fecha posterior a la ingresada)';
+  // Generic detection for period / payment-due validation messages, whose
+  // exact wording varies. Scan per LINE of the raw innerText: real RCEL error
+  // sentences contain both the field name and the problem phrase in a single
+  // line, while form labels (always present in the body) sit on their own
+  // lines — so a proximity window across lines would false-positive but a
+  // same-line match cannot.
+  for (const rawLine of pageText.split(/\r?\n+/)) {
+    const line = normalize(rawLine);
+    if (!line) continue;
+    const hasPhrase = AFIP_DATE_ERROR_PHRASES.some((phrase) => line.includes(phrase));
+    if (!hasPhrase) continue;
+    if (AFIP_DATE_ERROR_CONTEXTS.some((context) => line.includes(context))) {
+      return `AFIP rejected invoice dates: ${line}`;
+    }
   }
 
-  return 'AFIP rejected invoice date: La Fecha del Comprobante es invalida';
+  return undefined;
 }
 
 //TODO: check why this was used
@@ -165,6 +210,8 @@ export interface InvoiceRunResult {
   failureCode?: string;
   artifactPath?: string;
   issuedDate?: `${string}/${string}/${string}`;
+  /** Non-fatal notes: values that were defaulted, corrected or skipped. */
+  warnings?: string[];
 }
 
 export interface InvoiceIssuerOptions {
@@ -355,6 +402,7 @@ export class InvoiceIssuer {
         isTimeout: result.isTimeout ?? false,
         artifactPath: result.artifactPath,
         issuedDate: result.issuedDate,
+        warnings: result.warnings,
       })),
     };
     await writeFile(metadataPath, JSON.stringify(metadata, null, 2), 'utf8');
@@ -372,10 +420,11 @@ export class InvoiceIssuer {
       this.timeoutMs,
       `Timeout: invoice ${inv.NOMBRE} exceeded ${this.timeoutMs}ms`,
     );
+    const warnings: string[] = [];
 
     try {
       const issueDetails = await Promise.race([
-        this.issueInvoice(inv, index, timeout),
+        this.issueInvoice(inv, index, timeout, warnings),
         timeout.promise,
       ]);
       timeout.disarm();
@@ -386,6 +435,7 @@ export class InvoiceIssuer {
         duration: Date.now() - start,
         artifactPath: issueDetails.artifactPath,
         issuedDate: issueDetails.issuedDate,
+        warnings: warnings.length > 0 ? [...warnings] : undefined,
       };
     } catch (e) {
       timeout.disarm();
@@ -401,6 +451,8 @@ export class InvoiceIssuer {
         isTimeout,
         failureCode: classifyFailureCode(errorMessage),
         duration: Date.now() - start,
+        // Copy: after a timeout the zombie run keeps mutating the live array.
+        warnings: warnings.length > 0 ? [...warnings] : undefined,
       };
     }
   }
@@ -418,18 +470,29 @@ export class InvoiceIssuer {
     inv: Columns,
     index: number,
     timeout: CancellableTimeout,
+    warnings: string[] = [],
   ): Promise<{ artifactPath: string; issuedDate: `${string}/${string}/${string}` }> {
+    const warn = (message: string) => {
+      warnings.push(message);
+      console.debug(`[${index}] ⚠️ ${message}`);
+    };
     const start = performance.now();
     await sleep(this.page, 1000);
     console.debug(`[${index}] ⏳ Issuing ${inv.NOMBRE} invoice for ${inv.TOTAL} ...`);
     await startNewInvoice(this.page);
 
     await this.selectPointOfSale();
-    await this.selectInvoiceType(inv.FACTURA_TIPO);
+    // `|| 'C'` keeps the portal selection aligned with the mapper's default
+    // (empty/missing FACTURA_TIPO computes Factura C amounts).
+    await this.selectInvoiceType(inv.FACTURA_TIPO?.trim() || 'C');
     await this.page.locator('text=Continuar >').click();
 
     const today = DateTime.now();
     const date = this.resolveInvoiceDate(inv.FECHA_EMISION as string | undefined);
+    const rawIssueDate = (inv.FECHA_EMISION as string | undefined)?.trim();
+    if (rawIssueDate && !DateTime.fromFormat(rawIssueDate, 'dd/MM/yyyy').isValid) {
+      warn(`FECHA_EMISION "${rawIssueDate}" inválida: se usa la fecha del run (${date}).`);
+    }
     const dateInput = this.page.locator(
       'input[name="fechaEmisionComprobante"]',
     );
@@ -442,15 +505,13 @@ export class InvoiceIssuer {
 
     await this.selectAssociatedActivityIfPresent();
 
-    const serviceFrom = inv.FECHA_SERVICIO_DESDE
-      ? DateTime.fromJSDate(inv.FECHA_SERVICIO_DESDE).toFormat('dd/MM/yyyy') as `${string}/${string}/${string}`
-      : getPeriodFromDate(date);
-    const serviceTo = inv.FECHA_SERVICIO_HASTA
-      ? DateTime.fromJSDate(inv.FECHA_SERVICIO_HASTA).toFormat('dd/MM/yyyy') as `${string}/${string}/${string}`
-      : getPeriodToDate(date);
-    const paymentDue = inv.FECHA_VTO_PAGO
-      ? DateTime.fromJSDate(inv.FECHA_VTO_PAGO).toFormat('dd/MM/yyyy') as `${string}/${string}/${string}`
-      : getPeriodToDate(date);
+    const {
+      serviceFrom,
+      serviceTo,
+      paymentDue,
+      warnings: periodWarnings,
+    } = resolveServicePeriod(inv, date);
+    periodWarnings.forEach(warn);
 
     const fromDateInput = this.page.locator(
       'input[name="periodoFacturadoDesde"]',
@@ -473,7 +534,7 @@ export class InvoiceIssuer {
     await this.page.locator('text=Continuar >').click();
     await this.failFastOnKnownDateValidationError();
 
-    const { invoiceData } = mapInvoiceData(inv);
+    const { invoiceData, ivaConditionLabel } = mapInvoiceData(inv);
     const documentType = invoiceData.DocTipo;
     if (!documentType) {
       throw new Error(
@@ -482,31 +543,122 @@ export class InvoiceIssuer {
     }
 
     const ivaReceiverSelect = this.page.locator('select[name="idIVAReceptor"]');
-    await ivaReceiverSelect.waitFor({ state: 'visible' });
+    try {
+      await ivaReceiverSelect.waitFor({ state: 'visible', timeout: 30_000 });
+    } catch {
+      const bodyText = await this.page.locator('body').innerText().catch(() => '');
+      const dateError = extractAfipDateValidationError(bodyText);
+      if (dateError) {
+        throw new Error(dateError);
+      }
+      throw new Error(
+        `AFIP form did not advance to the receiver step for ${inv.NOMBRE}. ` +
+        'Review FECHA_EMISION / PERIODO_DESDE / PERIODO_HASTA / FECHA_VTO_PAGO values — ' +
+        'the portal is likely showing a date validation message.',
+      );
+    }
     const ivaOptions = await this.waitForSelectableOptions(ivaReceiverSelect);
+    // A value that resolveIvaReceiverCode could not recognize already fell
+    // back to the default 6, so it is NOT treated as an explicit request.
+    const ivaResolution = resolveIvaReceiverCode(
+      inv.IVA_RECEIVER,
+      IVA_RECEIVER_CONDITIONS.RESPONSABLE_MONOTRIBUTO,
+    );
+    const ivaExplicitlyRequested =
+      ivaResolution.source === 'numeric' || ivaResolution.source === 'label';
     // AFIP usually requires "Consumidor final" when customer document type is DNI.
     const requestedIva = documentType === DOCUMENT_TYPES.DNI
       ? '5'
       : String(invoiceData.CondicionIVAReceptorId);
+
+    if (
+      documentType === DOCUMENT_TYPES.DNI &&
+      ivaExplicitlyRequested &&
+      String(invoiceData.CondicionIVAReceptorId) !== requestedIva
+    ) {
+      warn(
+        `CONDICION_IVA_RECEPTOR ${invoiceData.CondicionIVAReceptorId} (${ivaConditionLabel}) ignorada: ` +
+        'TIPO_DOC=DNI fuerza Consumidor Final (5) en el portal.',
+      );
+    }
+
     const matchedIva = ivaOptions.find((option) => option.value === requestedIva);
     if (matchedIva) {
       await ivaReceiverSelect.selectOption({ index: matchedIva.index });
+    } else if (
+      ivaExplicitlyRequested &&
+      (documentType !== DOCUMENT_TYPES.DNI ||
+        String(invoiceData.CondicionIVAReceptorId) === requestedIva)
+    ) {
+      // The condition was explicitly requested in the CSV: selecting a
+      // different one would issue a legally different invoice, so fail loud.
+      throw new Error(
+        `Requested IVA receiver condition "${inv.IVA_RECEIVER}" (code ${requestedIva}, ${ivaConditionLabel}) ` +
+        `is not offered by AFIP for this comprobante. Available: ${ivaOptions.map((o) => `${o.value}:${o.text}`).join(', ')}`,
+      );
     } else {
+      // Default/implicit condition not offered (e.g. Factura A only offers
+      // RI receivers): keep the legacy fallback but leave a visible trace.
+      warn(
+        (ivaResolution.source === 'unrecognized'
+          ? `CONDICION_IVA_RECEPTOR "${ivaResolution.raw}" no reconocida; `
+          : '') +
+        `Condición IVA receptor ${requestedIva} (${ivaConditionLabel}) no disponible en el portal; ` +
+        `se selecciona la primera opción "${ivaOptions[0]!.text}".`,
+      );
       await ivaReceiverSelect.selectOption({ index: ivaOptions[0]!.index });
     }
 
-    const docTypeSelectExists = await this.page
-      .locator('select[name="idTipoDocReceptor"]')
-      .count() > 0;
+    // Choosing the IVA condition re-renders the receiver section, so wait for
+    // the doc-type select instead of sampling count() at a single instant.
+    const docTypeSelect = this.page.locator('select[name="idTipoDocReceptor"]').first();
+    let docTypeSelectVisible = false;
+    try {
+      await docTypeSelect.waitFor({ state: 'visible', timeout: 10_000 });
+      docTypeSelectVisible = true;
+    } catch {
+      // Some IVA conditions hide the receiver document fields entirely.
+    }
 
-    if (docTypeSelectExists) {
+    if (docTypeSelectVisible) {
       await this.selectReceiverDocumentType(documentType, inv.TIPO_DOCUMENTO);
     }
 
     const receiverDocInput = this.page.locator('input[name="nroDocReceptor"]').first();
-    await receiverDocInput.waitFor({ state: 'visible', timeout: 10_000 });
-    await receiverDocInput.fill(inv.NUMERO);
-    await this.triggerReceiverDocumentBlur(receiverDocInput);
+    let receiverDocVisible = true;
+    try {
+      await receiverDocInput.waitFor({ state: 'visible', timeout: 10_000 });
+    } catch {
+      receiverDocVisible = false;
+    }
+
+    let receiverDocFilled = false;
+    if (receiverDocVisible) {
+      if (!docTypeSelectVisible) {
+        // The receiver section renders as a unit: if the number input is
+        // visible now, a doc-type select that appeared late is visible too.
+        if (await docTypeSelect.isVisible()) {
+          await this.selectReceiverDocumentType(documentType, inv.TIPO_DOCUMENTO);
+        } else {
+          warn(
+            'El selector de tipo de documento del receptor no apareció en el formulario; se continúa sin seleccionarlo.',
+          );
+        }
+      }
+      await receiverDocInput.fill(inv.NUMERO);
+      await this.triggerReceiverDocumentBlur(receiverDocInput);
+      receiverDocFilled = inv.NUMERO.trim().length > 0;
+    } else if (!inv.NUMERO || documentType === DOCUMENT_TYPES.CONSUMIDOR_FINAL) {
+      warn(
+        'El campo de documento del receptor no está visible y no es requerido para esta condición; se continúa sin identificar al receptor.',
+      );
+    } else {
+      throw new Error(
+        `Receiver document input did not appear for ${inv.NOMBRE}. ` +
+        `The selected IVA condition ("${ivaConditionLabel}") may have changed the receiver form fields. ` +
+        'Verify CONDICION_IVA_RECEPTOR is consistent with TIPO_DOC/DOCUMENTO.',
+      );
+    }
 
     if (documentType === DOCUMENT_TYPES.DNI) {
       await this.page
@@ -559,7 +711,11 @@ export class InvoiceIssuer {
 
     await this.page.locator('text=Continuar >').click();
 
-    await this.page.locator(`text=${inv.NUMERO}`).waitFor();
+    // The total is the universal anchor of the review page; the document
+    // number only appears there when it was actually typed.
+    if (receiverDocFilled) {
+      await this.page.locator(`text=${inv.NUMERO}`).waitFor();
+    }
     await this.page.locator(`b:has-text("${totalValue}")`).waitFor();
 
     await this.page.locator('text=Confirmar Datos...').click();

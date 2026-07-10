@@ -75,7 +75,16 @@ const tools: Tool[] = [
           type: 'string',
           minLength: 1,
           description:
-            'Raw invoice CSV text (csv/example.csv style). Recommended headers: MES, COMPROBANTE, NRO_COMP, FECHA, CONCEPTO, MATRICULA, HOSPEDAJE, SERVICIOS, FORMA_DE_PAGO, TOTAL, PAGADOR, RESIDENTE, TIPO_DOC, DOCUMENTO, DIRECCION, CONDICION_IVA_RECEPTOR. Minimum required headers: TOTAL, PAGADOR, TIPO_DOC, DOCUMENTO. Supported aliases include METODO_PAGO/FORMA_PAGO/CONDICION_DE_VENTA for payment method and CONDICIONIVA/IVA_RECEPTOR/IVA_RECEIVER for IVA receiver condition.',
+            'Raw invoice CSV text. ' +
+            'Monotributo / Factura C base headers: FECHA, COMPROBANTE, CONCEPTO, FORMA_DE_PAGO, TOTAL, PAGADOR, TIPO_DOC, DOCUMENTO, DIRECCION, CONDICION_IVA_RECEPTOR. ' +
+            'Responsable Inscripto / Factura A-B additionally accepts: IVA_EXENTO, ALICUOTA_IVA, IVA_GRAVADO, PERIODO_DESDE, PERIODO_HASTA, FECHA_VTO_PAGO. ' +
+            'Minimum required headers: TOTAL, PAGADOR, TIPO_DOC, DOCUMENTO. ' +
+            'IMPORTANT: the IVA_* columns are IGNORED for Factura C (monotributo) — do not add them there. ' +
+            'TOTAL is the final amount for Factura B/C; for Factura A it is the NET amount (21% IVA is added on top unless IVA_EXENTO=true). ' +
+            'Legacy columns MES, MATRICULA, RESIDENTE, SERVICIOS only feed the fallback CONCEPTO; HOSPEDAJE and NRO_COMP are accepted but their values are IGNORED — leave them empty. ' +
+            'PERIODO_DESDE/PERIODO_HASTA/FECHA_VTO_PAGO apply to ANY comprobante (for Factura C include them only when the service period differs from the emission month). ' +
+            'A missing or unrecognized COMPROBANTE is issued as Factura C (credit/debit notes and receipts are rejected per row). ' +
+            'Aliases: METODO_PAGO/FORMA_PAGO/CONDICION_DE_VENTA (payment method), CONDICIONIVA/IVA_RECEPTOR/IVA_RECEIVER (receiver condition), NOMBRE=PAGADOR, NUMERO=DOCUMENTO, DOMICILIO=DIRECCION, FECHA_EMISION=FECHA, PERIODO_DESDE/HASTA=FECHA_SERVICIO_DESDE/HASTA (schema-canonical aliases apply only when the legacy column is absent).',
         },
         credentialsCsvText: {
           type: 'string',
@@ -95,12 +104,14 @@ const tools: Tool[] = [
         allowInteractivePrompt: {
           type: 'boolean',
           description:
-            'Allow stdin prompt for missing credentials. ' +
-            'WARNING: must be false (default) when running as MCP server — setting to true will break the MCP stdio transport.',
+            'IGNORED by the MCP server (it never prompts; interactive credential prompts are CLI-only). ' +
+            'Accepted for backward compatibility — leave unset.',
         },
         preferredIssuerCuit: {
           type: 'string',
-          description: 'If credentialsCsvText has multiple rows, pick the row matching this CUIT.',
+          description:
+            'ONLY applies when credentialsCsvText has multiple rows: picks the row matching this CUIT. ' +
+            'It does NOT load stored clients — use issuerCuit for that.',
         },
         headless: {
           type: ['boolean', 'string'],
@@ -117,7 +128,11 @@ const tools: Tool[] = [
         },
         pointOfSale: {
           type: 'string',
-          description: 'Optional AFIP point-of-sale value. Omit (or use "1") to pick first available option.',
+          description:
+            'Optional AFIP point-of-sale. Must match EXACTLY the value of the AFIP <select> option ' +
+            '(e.g. "00003", not "3") — check list_clients or the portal. ' +
+            'Omit to auto-select (stored defaultPointOfSale, then first stored POS, then first portal option). ' +
+            'Note: the literal value "1" is treated as "first available option" for legacy compatibility.',
         },
         saveSummaryPath: {
           type: 'string',
@@ -134,11 +149,15 @@ const tools: Tool[] = [
         },
         currency: {
           type: 'string',
-          description: 'Currency code used in run summary output.',
+          description:
+            'ISO 4217 code (e.g. "ARS") used ONLY to format amounts in logs and the run summary. ' +
+            'It does NOT change the invoice currency: invoices are always issued in Argentine pesos (PES).',
         },
         globalConcept: {
           type: 'string',
-          description: 'Optional extra concept suffix text.',
+          description:
+            'Optional text appended as a suffix to every row\'s CONCEPTO (rendered as "<CONCEPTO> - <text>"). ' +
+            'It does not replace the per-row CONCEPTO.',
         },
         addMonthToConcept: {
           type: 'boolean',
@@ -146,7 +165,10 @@ const tools: Tool[] = [
         },
         now: {
           type: 'boolean',
-          description: 'Use current date instead of previous-month fallback date logic.',
+          description:
+            'Date rule for rows without FECHA. true = today. ' +
+            'false (default) = today, EXCEPT when today is before the 14th of the month: then the last day of the PREVIOUS month is used ' +
+            '(may be rejected by AFIP due to the 5/10-day date tolerance). Rows with a valid FECHA always use their own date.',
         },
         debug: {
           type: 'boolean',
@@ -155,9 +177,10 @@ const tools: Tool[] = [
         loginUrl: {
           type: 'string',
           description:
-            'AFIP login URL. Defaults to the Monotributo login. ' +
-            'Use "https://auth.afip.gob.ar/contribuyente_/login.xhtml?action=SYSTEM&system=rcel" ' +
-            'for Responsable Inscripto taxpayers.',
+            'AFIP login URL. Defaults to the Monotributo login — correct for Factura C. ' +
+            'ONLY for Responsable Inscripto taxpayers (Factura A/B) use ' +
+            '"https://auth.afip.gob.ar/contribuyente_/login.xhtml?action=SYSTEM&system=rcel". ' +
+            'Do NOT pass the rcel URL for a monotributista issuing Factura C.',
         },
         serverHost: {
           type: 'string',
@@ -175,7 +198,11 @@ const tools: Tool[] = [
     name: 'dry_run_csv',
     title: 'Dry run CSV',
     description:
-      'Validates and normalizes legacy CSV text without launching the browser or issuing invoices.',
+      'Validates and normalizes legacy CSV text without launching the browser or issuing invoices. ' +
+      'Returns per-row warnings (defaulted/ignored values) and a mapperPreview with exactly what would be sent to AFIP: ' +
+      'comprobante type, amounts (ImpNeto/ImpIVA/ImpTotal), receiver IVA condition, and effective service period / payment due dates. ' +
+      'Effective dates follow the same `now` rule as emit_invoice — pass the same value you will use there. ' +
+      'ALWAYS review warnings and mapperPreview with the user before calling emit_invoice.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -183,6 +210,12 @@ const tools: Tool[] = [
           type: 'string',
           minLength: 1,
           description: 'Raw legacy invoice CSV text to validate and normalize.',
+        },
+        now: {
+          type: 'boolean',
+          description:
+            'Pass the SAME value you will pass to emit_invoice so the previewed dates match. ' +
+            'true = today. false (default) = today, except before the 14th of the month: last day of the previous month.',
         },
       },
       required: ['invoiceCsvText'],
@@ -193,8 +226,9 @@ const tools: Tool[] = [
     name: 'validate_credentials_source',
     title: 'Validate credentials source',
     description:
-      'Validates AFIP credentials and returns a masked summary. ' +
-      'Pass issuerCuit to validate a stored client, OR pass an explicit credentials object. ' +
+      'Resolves and masks the AFIP credentials source WITHOUT contacting AFIP: it only checks that the 4 required ' +
+      'values are present after merging sources (a wrong password still returns ok:true). ' +
+      'Pass issuerCuit to resolve a stored client, OR pass an explicit credentials object. ' +
       'Call list_clients first to check for available stored clients.',
     inputSchema: {
       type: 'object',
@@ -216,22 +250,20 @@ const tools: Tool[] = [
         allowInteractivePrompt: {
           type: 'boolean',
           description:
-            'Allow stdin prompt for missing credentials. ' +
-            'WARNING: must be false (default) when running as MCP server — setting to true will break the MCP stdio transport.',
+            'IGNORED by the MCP server (it never prompts; interactive credential prompts are CLI-only). ' +
+            'Accepted for backward compatibility — leave unset.',
         },
         preferredIssuerCuit: {
           type: 'string',
-          description: 'Preferred issuer CUIT when CSV has multiple rows.',
+          description:
+            'ONLY applies when credentialsCsvText has multiple rows: picks the row matching this CUIT. ' +
+            'It does NOT load stored clients — use issuerCuit for that.',
         },
       },
-      oneOf: [
+      anyOf: [
         { required: ['credentialsCsvText'] },
         { required: ['credentials'] },
         { required: ['issuerCuit'] },
-        {
-          required: ['allowInteractivePrompt'],
-          properties: { allowInteractivePrompt: { const: true } },
-        },
       ],
       additionalProperties: false,
     },
@@ -270,11 +302,16 @@ const tools: Tool[] = [
           type: 'array',
           items: { type: 'string' },
           minItems: 1,
-          description: 'Array of available point-of-sale identifiers for this client.',
+          description:
+            'Array of available point-of-sale identifiers for this client. ' +
+            'Each value must match the AFIP <select> option value EXACTLY (e.g. "00003", not "3"); ' +
+            'the literal "1" is treated as "first available option" (legacy).',
         },
         defaultPointOfSale: {
           type: 'string',
-          description: 'Default POS to use when pointOfSale is omitted from emit_invoice. Must be one of pointsOfSale.',
+          description:
+            'Default POS to use when pointOfSale is omitted from emit_invoice. Must be one of pointsOfSale ' +
+            'and match the AFIP <select> option value exactly (e.g. "00003", not "3").',
         },
       },
       required: ['AFIP_USERNAME', 'AFIP_PASSWORD', 'AFIP_ISSUER_CUIT', 'businessName', 'pointsOfSale'],
@@ -440,7 +477,17 @@ const PROMPT_CONTENT: Record<string, (args?: Record<string, string>) => { descri
 
 ## IVA Receiver Condition
 
-\`CONDICION_IVA_RECEPTOR\` accepts numeric codes (e.g. \`1\`) or Spanish text labels (e.g. \`IVA Responsable Inscripto\`, \`Consumidor Final\`). Labels are case/accent-insensitive.
+\`CONDICION_IVA_RECEPTOR\` accepts valid AFIP receiver codes (1, 4, 5, 6, 7, 8, 9, 10, 13, 15, 16) or Spanish text labels (e.g. \`IVA Responsable Inscripto\`, \`Consumidor Final\`). Labels are case/accent-insensitive. Empty defaults to \`6\` (Responsable Monotributo). Unrecognized values fall back to the default and produce a warning in \`dry_run_csv\`.
+
+Exception: \`TIPO_DOC=DNI\` always emits with condition \`5\` (Consumidor Final); any other value is overridden (with a warning when it was explicit).
+
+Text labels are interpreted to their numeric code and produce one expected informational warning per row in \`dry_run_csv\` — this is normal, not an error; use the numeric code to avoid it.
+
+## Monotributo (Factura C)
+
+- The default \`loginUrl\` (Monotributo) is the correct one — do NOT pass the rcel URL.
+- \`IVA_EXENTO\`, \`ALICUOTA_IVA\` and \`IVA_GRAVADO\` are IGNORED for Factura C: TOTAL is always the final amount.
+- \`PERIODO_DESDE\`/\`PERIODO_HASTA\`/\`FECHA_VTO_PAGO\` work for any comprobante, but for Factura C add them only when the service period really differs from the emission month (auto-calculation from FECHA is correct otherwise).
 
 ## Factura A (Responsable Inscripto)
 
@@ -478,24 +525,36 @@ Read the \`SKILL.md\` resource for the full guide: field mapping, IVA codes, env
           type: 'text',
           text: `# Building invoiceCsvText
 
-## CSV header
+## Step 1 — Identify the régimen
+
+Ask (or infer from context) whether the ISSUER is a **Monotributista (Factura C)** or a **Responsable Inscripto (Factura A/B)**. The header depends on it.
+
+## CSV header — Monotributo / Factura C (base)
 
 \`\`\`
-MES,COMPROBANTE,NRO_COMP,FECHA,CONCEPTO,MATRICULA,HOSPEDAJE,SERVICIOS,FORMA_DE_PAGO,TOTAL,PAGADOR,RESIDENTE,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR,PERIODO_DESDE,PERIODO_HASTA,IVA_EXENTO
+FECHA,COMPROBANTE,CONCEPTO,FORMA_DE_PAGO,TOTAL,PAGADOR,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR
+\`\`\`
+
+Do NOT add IVA columns for Factura C: \`IVA_EXENTO\`/\`ALICUOTA_IVA\`/\`IVA_GRAVADO\` are ignored there. Add \`PERIODO_DESDE\`/\`PERIODO_HASTA\` only when the service period differs from the emission month (it is auto-calculated from FECHA otherwise, which is correct for the common case).
+
+## CSV header — Responsable Inscripto / Factura A-B (extended)
+
+\`\`\`
+FECHA,COMPROBANTE,CONCEPTO,FORMA_DE_PAGO,TOTAL,PAGADOR,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR,PERIODO_DESDE,PERIODO_HASTA,FECHA_VTO_PAGO,IVA_EXENTO
 \`\`\`
 
 ## Checklist — confirm before proceeding
 
-- [ ] COMPROBANTE (Factura A, B, or C — determines AFIP form flow and IVA handling)
+- [ ] COMPROBANTE (Factura A, B, or C — determines AFIP form flow and IVA handling). Credit/debit notes and receipts are NOT supported.
 - [ ] PAGADOR (receiver name)
 - [ ] DOCUMENTO (CUIT/DNI) — never guess, always confirm
-- [ ] CONDICION_IVA_RECEPTOR (numeric code or text label, e.g. \`1\` or \`IVA Responsable Inscripto\`)
-- [ ] TOTAL amount
+- [ ] CONDICION_IVA_RECEPTOR (valid code 1/4/5/6/7/8/9/10/13/15/16 or text label, e.g. \`IVA Responsable Inscripto\`)
+- [ ] TOTAL amount — final amount for Factura B/C; NET amount for Factura A (21% IVA added on top unless IVA_EXENTO=true)
 - [ ] CONCEPTO description
 - [ ] FORMA_DE_PAGO
-- [ ] PERIODO_DESDE / PERIODO_HASTA — service period dates (DD/MM/YYYY). If omitted, auto-calculated from FECHA
-- [ ] IVA_EXENTO — set to \`true\` for IVA-exempt Factura A invoices (total = net, no IVA added)
-- [ ] Keep legacy optional fields (\`MATRICULA\`, \`HOSPEDAJE\`, \`SERVICIOS\`, \`RESIDENTE\`) empty unless explicitly provided by the user
+- [ ] Optional (any type): PERIODO_DESDE / PERIODO_HASTA (DD/MM/YYYY) and FECHA_VTO_PAGO (must NOT be earlier than FECHA). For Factura C include them only when the service period differs from the emission month
+- [ ] Factura A/B only: IVA_EXENTO — for Factura A, \`true\` means IVA-exempt (total = net, no IVA added); ignored for Factura C
+- [ ] Leave legacy fields (\`MES\`, \`MATRICULA\`, \`HOSPEDAJE\`, \`SERVICIOS\`, \`RESIDENTE\`, \`NRO_COMP\`) OUT of the CSV unless explicitly provided by the user
 
 ## Factura A notes
 
@@ -503,12 +562,12 @@ For Factura A (RI to RI):
 - Use \`CONDICION_IVA_RECEPTOR=IVA Responsable Inscripto\` (or code \`1\`)
 - Set \`IVA_EXENTO=true\` if the service is IVA exempt. Without it, 21% IVA is added on top of TOTAL.
 - Always include \`PERIODO_DESDE\` and \`PERIODO_HASTA\` explicitly — do not rely on auto-calculation.
-- Pass \`loginUrl\` in the emit_invoice call for RI taxpayers.
+- Pass \`loginUrl\` (rcel) in the emit_invoice call for RI taxpayers — never for monotributistas.
 
 If any field cannot be reliably extracted, ask the user.
-If \`PERIODO_HASTA\` is earlier than \`PERIODO_DESDE\`, stop and ask the user which date should be corrected.
-Use \`TOTAL\` as the authoritative amount. Do not duplicate the amount into \`HOSPEDAJE\` or \`SERVICIOS\` unless the user explicitly asks for those legacy fields.
-Once confirmed, pass the CSV to \`dry_run_csv\`.
+If \`PERIODO_HASTA\` is earlier than \`PERIODO_DESDE\`, or \`FECHA_VTO_PAGO\` is earlier than \`FECHA\`, stop and ask the user which date should be corrected.
+Use \`TOTAL\` as the authoritative amount. Never duplicate the amount into \`HOSPEDAJE\` or \`SERVICIOS\`.
+Once confirmed, pass the CSV to \`dry_run_csv\` and review its \`warnings\` and \`mapperPreview\` (amounts, receiver condition, dates) with the user.
 
 Read the \`SKILL.md\` resource for the complete field mapping table, IVA condition codes, and Factura A examples.`,
         },
@@ -534,16 +593,17 @@ Read the \`SKILL.md\` resource for the complete field mapping table, IVA conditi
 0. **Check for stored client** — call \`list_clients\`. Use the \`issuerCuit\` value exactly as returned. Do NOT use the receiver's CUIT/DOCUMENTO from the invoice CSV.
 1. **Validate credentials** — call \`validate_credentials_source\` with \`issuerCuit\` or \`credentials\` object. Stop if it fails.
 2. **Build CSV** — use the \`build_invoice_csv_from_input\` prompt if needed.
-3. **Dry run** — call \`dry_run_csv\`. Stop if \`invalidCount > 0\`.
-4. **Confirm** — present invoice count, totals, and receiver names. **Do not proceed without user confirmation.**
-5. **Emit** — call \`emit_invoice\` with \`now: true\` and \`issuerCuit\` (or \`credentials\` object). For Responsable Inscripto taxpayers (not Monotributo), add \`loginUrl: "https://auth.afip.gob.ar/contribuyente_/login.xhtml?action=SYSTEM&system=rcel"\`.
-6. **Report** — show success/failed counts. Render \`downloadUrl\` links if present.
+3. **Dry run** — call \`dry_run_csv\`. Stop if \`invalidCount > 0\`. Review \`warnings\` (defaulted/ignored values) and \`mapperPreview\` (amounts, comprobante type, receiver IVA condition, effective dates) — surface anything unexpected to the user.
+4. **Confirm** — present invoice count, totals, receiver names, and any dry-run warnings. **Do not proceed without user confirmation.**
+5. **Emit** — call \`emit_invoice\` with \`now: true\` and \`issuerCuit\` (or \`credentials\` object). ONLY for Responsable Inscripto taxpayers (Factura A/B, never Monotributo/Factura C), add \`loginUrl: "https://auth.afip.gob.ar/contribuyente_/login.xhtml?action=SYSTEM&system=rcel"\`.
+6. **Report** — show success/failed counts and any per-invoice \`warnings\`. Render \`downloadUrl\` links if present.
 
 Notes:
-- \`CONDICION_IVA_RECEPTOR\` accepts numeric codes (e.g. \`1\`) or text labels (e.g. \`IVA Responsable Inscripto\`).
+- \`CONDICION_IVA_RECEPTOR\` accepts valid AFIP receiver codes (1, 4, 5, 6, 7, 8, 9, 10, 13, 15, 16) or text labels (e.g. \`IVA Responsable Inscripto\`). Empty = 6 (Responsable Monotributo). Text labels produce an expected informational warning in \`dry_run_csv\` (not a problem — confirm the interpreted code and continue). \`TIPO_DOC=DNI\` always emits with condition 5.
+- Factura C (monotributo) ignores \`IVA_EXENTO\`/\`ALICUOTA_IVA\`/\`IVA_GRAVADO\`: TOTAL is always the final amount.
 - For Factura A (RI to RI): set \`IVA_EXENTO=true\` in the CSV for exempt invoices. Use \`PERIODO_DESDE\`/\`PERIODO_HASTA\` for explicit service periods.
-- Without \`IVA_EXENTO=true\`, Factura A defaults to 21% IVA added on top of TOTAL.
-- Safety: never print raw credentials, never guess CUIT/DNI, retry with \`now: true\` if AFIP rejects the date, and never proceed when service end date is earlier than service start date (ask the user to correct first).
+- Without \`IVA_EXENTO=true\`, Factura A defaults to 21% IVA added on top of TOTAL (TOTAL is the NET amount).
+- Safety: never print raw credentials, never guess CUIT/DNI, retry with \`now: true\` if AFIP rejects the date, and never proceed when the service end date is earlier than the start date or \`FECHA_VTO_PAGO\` is earlier than \`FECHA\` (ask the user to correct first).
 
 Read the \`SKILL.md\` resource for full payload examples, Factura A specifics, and AFIP behavior notes.`,
         },

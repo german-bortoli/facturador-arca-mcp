@@ -16,7 +16,9 @@ export async function validateCredentialsSource(
     credentialsCsvText: input.credentialsCsvText,
     issuerCuit: input.issuerCuit,
     preferredIssuerCuit: input.preferredIssuerCuit,
-    allowInteractivePrompt: input.allowInteractivePrompt ?? false,
+    // MCP transport can never serve a stdin prompt: the flag is ignored here
+    // (interactive prompts are CLI-only).
+    allowInteractivePrompt: false,
   });
 
   return {

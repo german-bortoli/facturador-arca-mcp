@@ -41,6 +41,11 @@ export interface EmitInvoiceInput {
 
 export interface DryRunCsvInput {
   invoiceCsvText: string;
+  /**
+   * Same date rule as emit_invoice: pass the value you will use there so the
+   * previewed emission/period dates match the real run.
+   */
+  now?: boolean;
 }
 
 // Backward-compatible type aliases for older internal references.

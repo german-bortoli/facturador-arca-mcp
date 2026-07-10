@@ -5,7 +5,7 @@ import { resolveCredentials } from '../credentials-resolver';
 import { startInvoiceHttpServer } from '../invoice-http-server';
 import type { EmitInvoiceInput } from '../types';
 
-function getInvoicingDate(now = false): `${string}/${string}/${string}` {
+export function getInvoicingDate(now = false): `${string}/${string}/${string}` {
   const today = DateTime.now();
   if (now) {
     return today.toFormat('dd/MM/yyyy') as `${string}/${string}/${string}`;
@@ -53,6 +53,7 @@ export async function emitInvoice(input: EmitInvoiceInput) {
       validCount: 0,
       invalidCount: parsed.invalid.length,
       invalidRows: parsed.invalid,
+      parseWarnings: parsed.warnings,
       successCount: 0,
       failedCount: 0,
       message: 'No valid invoices found in legacy CSV',
@@ -64,7 +65,9 @@ export async function emitInvoice(input: EmitInvoiceInput) {
     credentialsCsvText: input.credentialsCsvText,
     preferredIssuerCuit: input.preferredIssuerCuit,
     issuerCuit: input.issuerCuit,
-    allowInteractivePrompt: input.allowInteractivePrompt ?? false,
+    // MCP transport can never serve a stdin prompt: the flag is ignored here
+    // (interactive prompts are CLI-only).
+    allowInteractivePrompt: false,
   });
 
   // Auto-select POS: explicit > stored default > first stored POS > empty.
@@ -141,7 +144,9 @@ export async function emitInvoice(input: EmitInvoiceInput) {
         name: result.invoice.NOMBRE,
         document: result.invoice.NUMERO,
         error: result.error,
+        failureCode: result.failureCode,
         isTimeout: result.isTimeout,
+        warnings: result.warnings,
       }));
 
       const resolvedHost = input.serverHost ?? process.env.INVOICE_SERVER_HOST;
@@ -155,12 +160,20 @@ export async function emitInvoice(input: EmitInvoiceInput) {
         .getSuccessResults()
         .filter((r) => r.artifactPath)
         .map((r) => {
-          const entry: { name: string; artifactPath: string; downloadUrl?: string } = {
+          const entry: {
+            name: string;
+            artifactPath: string;
+            downloadUrl?: string;
+            warnings?: string[];
+          } = {
             name: r.invoice.NOMBRE ?? '',
             artifactPath: r.artifactPath!,
           };
           if (resolvedHost) {
             entry.downloadUrl = `${resolvedHost}:${fileServerPort}/public/invoices/${basename(r.artifactPath!)}`;
+          }
+          if (r.warnings?.length) {
+            entry.warnings = r.warnings;
           }
           return entry;
         });
@@ -171,6 +184,7 @@ export async function emitInvoice(input: EmitInvoiceInput) {
         validCount: parsed.valid.length,
         invalidCount: parsed.invalid.length,
         invalidRows: parsed.invalid,
+        parseWarnings: parsed.warnings,
         successCount: parsed.valid.length - failed.length,
         failedCount: failed.length,
         failed,

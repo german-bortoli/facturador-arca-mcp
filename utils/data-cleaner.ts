@@ -1,4 +1,3 @@
-import z from 'zod';
 import { formatDateToAfip } from './date-formatter.js';
 
 /**
@@ -110,21 +109,41 @@ export function parsePercentage(
 }
 
 /**
- * Validate and parse invoice type
- * @param type - Invoice type string
- * @param defaultValue - Default value if invalid
+ * Validate and parse invoice type. Case-insensitive; leading/trailing
+ * whitespace is trimmed.
+ * @param type - Invoice type string ("A", "B" or "C" in any case)
  * @returns Validated invoice type ("A", "B", or "C")
+ * @throws Error for any other value (including empty string and credit/debit
+ *   notes or receipts, which this issuer does not support). Callers wanting an
+ *   empty-cell default apply it at the call site (see invoice-mapper.ts:
+ *   `row.FACTURA_TIPO?.trim() || 'C'`).
  * @example
- * parseInvoiceType("A", "C") // "A"
- * parseInvoiceType("invalid", "C") // "C"
+ * parseInvoiceType(" a ") // "A"
+ * parseInvoiceType("Nota de credito") // throws "Unsupported invoice type..."
  */
 export function parseInvoiceType(
   type: string
 ): 'A' | 'B' | 'C' {
-  return z.enum(['A', 'B', 'C']).parse(type.toUpperCase().trim());
+  const normalized = type.toUpperCase().trim();
+  if (normalized === 'A' || normalized === 'B' || normalized === 'C') {
+    return normalized;
+  }
+  throw new Error(
+    `Unsupported invoice type "${type}". Supported values: A, B, C. ` +
+    'Credit notes, debit notes and receipts are not supported by this issuer.',
+  );
 }
 
-const IVA_RECEIVER_LABEL_MAP: Record<string, number> = {
+/**
+ * Receiver IVA condition codes actually accepted by AFIP (RG 5616).
+ * Note: 2, 3, 11, 12 and 14 are NOT valid receiver codes even though they
+ * fall inside the 1-16 range.
+ */
+export const VALID_IVA_RECEIVER_CODES: readonly number[] = [
+  1, 4, 5, 6, 7, 8, 9, 10, 13, 15, 16,
+];
+
+export const IVA_RECEIVER_LABEL_MAP: Record<string, number> = {
   'IVA RESPONSABLE INSCRIPTO': 1,
   'RESPONSABLE INSCRIPTO': 1,
   'IVA SUJETO EXENTO': 4,
@@ -141,33 +160,44 @@ const IVA_RECEIVER_LABEL_MAP: Record<string, number> = {
   'MONOTRIBUTO TRABAJADOR INDEPENDIENTE PROMOVIDO': 16,
 };
 
+export interface IvaReceiverResolution {
+  /** Resolved code (falls back to the provided default). */
+  code: number;
+  /** How the code was resolved: empty input, valid numeric code, mapped text label, or unrecognized value. */
+  source: 'empty' | 'numeric' | 'label' | 'unrecognized';
+  /** Original input (trimmed) when a non-empty value was provided. */
+  raw?: string;
+}
+
 /**
- * Parse IVA receiver condition code with validation.
- * Accepts numeric codes (1-16) or Spanish text labels (e.g. "IVA Responsable Inscripto").
- * @param code - IVA receiver code (string, number, or text label)
- * @param defaultValue - Default value if invalid
- * @returns Validated code (1-16)
- * @example
- * parseIvaReceiverCode("6", 6) // 6
- * parseIvaReceiverCode("IVA Responsable Inscripto", 6) // 1
- * parseIvaReceiverCode("25", 6) // 6 (invalid, returns default)
+ * Resolve an IVA receiver condition value reporting HOW it was resolved,
+ * so callers can surface warnings (e.g. a text label being interpreted,
+ * or an unrecognized value silently falling back to the default).
  */
-export function parseIvaReceiverCode(
+export function resolveIvaReceiverCode(
   code: string | number | undefined,
-  defaultValue: number
-): number {
+  defaultValue: number,
+): IvaReceiverResolution {
   if (code === undefined || code === null || code === '') {
-    return defaultValue;
+    return { code: defaultValue, source: 'empty' };
   }
 
   if (typeof code === 'number') {
-    return (code >= 1 && code <= 16) ? code : defaultValue;
+    return VALID_IVA_RECEIVER_CODES.includes(code)
+      ? { code, source: 'numeric', raw: String(code) }
+      : { code: defaultValue, source: 'unrecognized', raw: String(code) };
   }
 
   const trimmed = String(code).trim();
+  if (!trimmed) {
+    return { code: defaultValue, source: 'empty' };
+  }
+
   const parsed = parseInt(trimmed, 10);
-  if (!isNaN(parsed) && parsed >= 1 && parsed <= 16) {
-    return parsed;
+  if (!isNaN(parsed)) {
+    return VALID_IVA_RECEIVER_CODES.includes(parsed)
+      ? { code: parsed, source: 'numeric', raw: trimmed }
+      : { code: defaultValue, source: 'unrecognized', raw: trimmed };
   }
 
   const normalized = trimmed
@@ -175,7 +205,30 @@ export function parseIvaReceiverCode(
     .replace(/[\u0300-\u036f]/g, '')
     .toUpperCase();
   const matched = IVA_RECEIVER_LABEL_MAP[normalized];
-  return matched ?? defaultValue;
+  if (matched !== undefined) {
+    return { code: matched, source: 'label', raw: trimmed };
+  }
+  return { code: defaultValue, source: 'unrecognized', raw: trimmed };
+}
+
+/**
+ * Parse IVA receiver condition code with validation.
+ * Accepts valid AFIP receiver codes (see VALID_IVA_RECEIVER_CODES) or Spanish
+ * text labels (e.g. "IVA Responsable Inscripto").
+ * @param code - IVA receiver code (string, number, or text label)
+ * @param defaultValue - Default value if invalid
+ * @returns Validated receiver code
+ * @example
+ * parseIvaReceiverCode("6", 6) // 6
+ * parseIvaReceiverCode("IVA Responsable Inscripto", 6) // 1
+ * parseIvaReceiverCode("25", 6) // 6 (invalid, returns default)
+ * parseIvaReceiverCode("2", 6) // 6 (2 is not a valid RECEIVER code)
+ */
+export function parseIvaReceiverCode(
+  code: string | number | undefined,
+  defaultValue: number
+): number {
+  return resolveIvaReceiverCode(code, defaultValue).code;
 }
 
 /**
