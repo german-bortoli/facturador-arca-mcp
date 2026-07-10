@@ -35,8 +35,10 @@ Este repositorio utiliza un único contrato CSV para CLI y MCP:
 
 Notas sobre fechas:
 
-- `FECHA_EMISION` en CSV legacy acepta `dd/MM/yyyy` o `yyyy-MM-dd`.
-- Las fechas de servicio/pago aceptan `dd/MM/yyyy` o `yyyy-MM-dd`.
+- La fecha de emisión se informa en la columna `FECHA` (alias: `FECHA_EMISION`) y acepta `dd/MM/yyyy` o `yyyy-MM-dd`.
+- Las fechas de servicio/pago (`PERIODO_DESDE`/`PERIODO_HASTA`/`FECHA_VTO_PAGO`) aceptan `dd/MM/yyyy` o `yyyy-MM-dd`.
+- Fechas inválidas no rompen la fila: se degradan a los valores por defecto **y generan un warning** visible en `dry_run_csv` y `emit_invoice`.
+- Si `FECHA_VTO_PAGO` es anterior a la fecha de emisión (AFIP siempre lo rechaza), el emisor usa el último día del mes de emisión y lo reporta como warning.
 
 ## Uso por CLI
 
@@ -83,8 +85,8 @@ Tools disponibles:
 - `update_client` — Actualiza parcialmente un cliente existente (solo los campos enviados se modifican).
 - `delete_client` — Elimina permanentemente un cliente del store local.
 - `emit_invoice` — Emite facturas. Acepta `issuerCuit` para cargar credenciales desde el store local.
-- `dry_run_csv` — Valida CSV sin emitir.
-- `validate_credentials_source` — Verifica credenciales. Acepta `issuerCuit` para validar credenciales guardadas.
+- `dry_run_csv` — Valida CSV sin emitir. Devuelve `warnings` (valores degradados/ignorados) y `mapperPreview` con lo que se enviaría a AFIP por fila: tipo de comprobante, montos (`ImpNeto`/`ImpIVA`/`ImpTotal`), condición IVA del receptor y fechas efectivas de período/vencimiento.
+- `validate_credentials_source` — Resuelve y enmascara la fuente de credenciales **sin contactar AFIP** (una contraseña incorrecta igual devuelve `ok:true`; solo verifica que los 4 valores estén presentes). Acepta `issuerCuit` para resolver credenciales guardadas.
 
 Prompts disponibles:
 
@@ -190,15 +192,19 @@ Opcionales:
 
 - `credentialsCsvText`
 - `credentials` (`AFIP_USERNAME`, `AFIP_PASSWORD`, `AFIP_ISSUER_CUIT`, `RAZON_SOCIAL`)
-- `issuerCuit` — Carga credenciales desde el store SQLite local (guardadas previamente con `store_client`). Si `pointOfSale` se omite, se usa automáticamente el primer punto de venta guardado del cliente.
-- `allowInteractivePrompt`
-- `preferredIssuerCuit`
+- `issuerCuit` — Carga credenciales desde el store SQLite local (guardadas previamente con `store_client`). Si `pointOfSale` se omite, se usa automáticamente el `defaultPointOfSale` guardado o el primer punto de venta del cliente.
+- `allowInteractivePrompt` — deprecado en uso MCP; solo para CLI.
+- `preferredIssuerCuit` — solo aplica cuando `credentialsCsvText` tiene varias filas (elige la fila por CUIT). No carga clientes guardados: para eso usar `issuerCuit`.
 - `headless` (por defecto `true`; acepta boolean o string)
 - `slowMoMs`, `retry`
-- `pointOfSale`
+- `pointOfSale` — debe coincidir **exactamente** con el value del selector de AFIP (ej. `"00003"`, no `"3"`). El valor `"1"` significa "primera opción disponible" (compatibilidad legacy).
 - `saveSummaryPath`, `summaryFormat`, `summaryFailedOnly`
-- `currency`, `globalConcept`, `addMonthToConcept`
-- `now`, `debug`
+- `currency` — código ISO 4217 usado **solo para formatear** montos en logs/summary. No cambia la moneda de la factura: siempre se emite en pesos (PES).
+- `globalConcept` — texto que se agrega como **sufijo** al `CONCEPTO` de cada fila (`"<CONCEPTO> - <texto>"`); no lo reemplaza.
+- `addMonthToConcept`
+- `now` — `true` usa la fecha de hoy. `false` (default) también, **salvo** que hoy sea antes del día 14: en ese caso usa el último día del mes anterior (puede ser rechazado por AFIP por la tolerancia de 5/10 días). Las filas con `FECHA` válida siempre usan su propia fecha.
+- `debug`
+- `loginUrl` — URL de login AFIP. El default (Monotributo) es el correcto para Factura C. Solo para Responsable Inscripto (Factura A/B) usar la URL con `system=rcel`. **No** pasar la URL rcel para un monotributista.
 - `serverHost`: URL base del servidor (ej. `http://localhost`). Toma precedencia sobre `INVOICE_SERVER_HOST`.
 
 Precedencia de credenciales:
@@ -214,7 +220,7 @@ Usá este payload como punto de partida copy-paste para `emit_invoice`:
 
 ```json
 {
-  "invoiceCsvText": "MES,COMPROBANTE,NRO_COMP,FECHA,CONCEPTO,MATRICULA,HOSPEDAJE,SERVICIOS,FORMA_DE_PAGO,TOTAL,PAGADOR,RESIDENTE,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR\nABRIL,Factura C,00001-00000001,12/03/2026,Servicio de programacion de software,,150,,Transferencia bancaria,150,Cliente Demo SA,servicio de programacion de software,DNI,30111222,\"Calle Falsa 123, Ciudad Demo, Provincia Demo\",5",
+  "invoiceCsvText": "FECHA,COMPROBANTE,CONCEPTO,FORMA_DE_PAGO,TOTAL,PAGADOR,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR\n12/03/2026,Factura C,Servicio de programacion de software,Transferencia bancaria,150,Cliente Demo SA,DNI,30111222,\"Calle Falsa 123, Ciudad Demo, Provincia Demo\",5",
   "credentials": {
     "AFIP_USERNAME": "YOUR_USERNAME_OR_CUIT",
     "AFIP_PASSWORD": "YOUR_PASSWORD",
@@ -223,26 +229,34 @@ Usá este payload como punto de partida copy-paste para `emit_invoice`:
   },
   "headless": false,
   "retry": false,
-  "pointOfSale": "1",
   "debug": true
 }
 ```
 
 ### Formato del CSV legacy de facturas (MCP)
 
-Ejemplo:
+Header recomendado — Monotributo / Factura C:
 
 ```csv
-MES,COMPROBANTE,NRO_COMP,FECHA,CONCEPTO,MATRICULA,HOSPEDAJE,SERVICIOS,FORMA_DE_PAGO,TOTAL,PAGADOR,RESIDENTE,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR
-ABRIL,Factura C,00001-00000001,12/03/2026,Servicio de programacion de software,,150,,Otros,150,Cliente Demo Uno,servicio de programacion de software,DNI,30111222,"Calle Falsa 123, Ciudad Demo, Provincia Demo",5
+FECHA,COMPROBANTE,CONCEPTO,FORMA_DE_PAGO,TOTAL,PAGADOR,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR
+12/03/2026,Factura C,Servicio de programacion de software,Otros,150,Cliente Demo Uno,DNI,30111222,"Calle Falsa 123, Ciudad Demo, Provincia Demo",5
+```
+
+Header extendido — Responsable Inscripto / Factura A-B (agrega columnas de IVA y período):
+
+```csv
+FECHA,COMPROBANTE,CONCEPTO,FORMA_DE_PAGO,TOTAL,PAGADOR,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR,PERIODO_DESDE,PERIODO_HASTA,FECHA_VTO_PAGO,IVA_EXENTO
 ```
 
 Notas:
 
 - `Comprobante` es opcional (`Factura A/B/C` o `A/B/C`).
-- Si `Comprobante` falta o es inválido, se usa la primera opción disponible en AFIP.
+- Si `Comprobante` falta o trae un valor no reconocido, se emite **Factura C** (con warning cuando el valor no se reconoce). En un portal RI que no ofrezca Factura C, la fila falla con error claro en vez de emitir otro comprobante en silencio.
+- `Nota de Crédito`, `Nota de Débito` y `Recibo` **no están soportados**: la fila se rechaza con error (antes se emitía silenciosamente como Factura C).
 - `CONCEPTO` tiene prioridad si está presente; si no, se construye un concepto legacy de respaldo.
 - `FORMA_DE_PAGO`/`METODO_PAGO` es opcional. Si falta o está vacío, el flujo selecciona `Otros` por defecto.
+- **Semántica de `TOTAL`**: para Factura C y B es el importe final. Para Factura A es el **neto sin IVA**: AFIP agrega el 21% encima, salvo `IVA_EXENTO=true`.
+- Las columnas `IVA_GRAVADO`/`IVA_EXENTO`/`ALICUOTA_IVA` **se ignoran por completo en Factura C** (monotributo): solo aplican a Factura A/B.
 
 ### Referencia de campos del CSV legacy (`csv/example.csv`)
 
@@ -250,32 +264,33 @@ Los headers se normalizan sin distinguir mayúsculas/minúsculas ni acentos. Por
 
 | Header | Requerido | Valores / formato soportado | Comportamiento |
 |---|---|---|---|
-| `PAGADOR` | Sí | Cualquier string no vacío | Se mapea a `NOMBRE` (nombre del receptor). |
+| `PAGADOR` | Sí | Cualquier string no vacío | Se mapea a `NOMBRE` (nombre del receptor). Alias: `NOMBRE`. |
 | `Tipo doc` | Sí | Habitualmente `DNI`, `CUIT`, `CUIL` (sin distinguir mayúsculas/minúsculas) | Se mapea a `TIPO_DOCUMENTO`. Valores desconocidos se tratan como `CONSUMIDOR FINAL` en el mapeo AFIP. |
-| `Documento` | Sí | String numérico (con o sin separadores como `.` `,` `-` espacios) | Se mapea a `NUMERO`; los separadores se eliminan antes del mapeo AFIP. |
-| `TOTAL` | Sí | Número positivo (ej. `150`, `150.50`, `150,50`, `$150`) | Se parsea a monto numérico. Debe ser > 0. |
+| `Documento` | Sí | String numérico (con o sin separadores como `.` `,` `-` espacios) | Se mapea a `NUMERO`; los separadores se eliminan antes del mapeo AFIP. Alias: `NUMERO`, `NRO_DOCUMENTO`. |
+| `TOTAL` | Sí | Número positivo (ej. `150`, `150.50`, `150,50`, `$150`) | Importe **final** en Factura B/C; **neto sin IVA** en Factura A (salvo `IVA_EXENTO=true`). Debe ser > 0. |
 | `CONCEPTO` | No | Cualquier string | Si está presente, se usa como descripción de la factura. |
-| `COMPROBANTE` | No | `A`, `B`, `C`, `Factura A`, `Factura B`, `Factura C` | Se mapea a `FACTURA_TIPO`; si falta o es inválido, se selecciona la primera opción AFIP. |
-| `FECHA` | No | `dd/MM/yyyy` o `yyyy-MM-dd` | Se mapea a `FECHA_EMISION`; si falta o es inválida, se usa la fecha fallback de la app. |
-| `DIRECCION` | No | Cualquier string | Se mapea a `DOMICILIO`. En ciertos flujos con DNI es obligatorio en runtime. |
+| `COMPROBANTE` | No | `A`, `B`, `C`, `Factura A`, `Factura B`, `Factura C` | Se mapea a `FACTURA_TIPO`. Si falta o no se reconoce: se emite Factura C (con warning cuando el valor no se reconoce). NC/ND/Recibo: fila rechazada con error. Tiene precedencia sobre una columna `FACTURA_TIPO`. |
+| `FECHA` | No | `dd/MM/yyyy` o `yyyy-MM-dd` | Se mapea a `FECHA_EMISION` (alias: `FECHA_EMISION`); si falta o es inválida, se usa la fecha fallback de la app **con warning**. |
+| `DIRECCION` | No | Cualquier string | Se mapea a `DOMICILIO` (alias: `DOMICILIO`). En ciertos flujos con DNI es obligatorio en runtime. |
 | `FORMA_DE_PAGO` | No | Cualquier etiqueta (ej. `Transferencia bancaria`, `Otros`) | Método de pago. Intenta matching dinámico AFIP por texto/valor; fallback a `Otros` y luego a la primera opción disponible. |
 | `COD` | No | Cualquier string | Se mapea a código opcional de ítem en el detalle. |
-| `IVA_GRAVADO` | No | Número (porcentaje) | Por defecto `100` cuando se omite. |
-| `IVA_EXENTO` | No | Número (porcentaje) | Por defecto `0` cuando se omite. |
-| `ALICUOTA_IVA` | No | Número (ej. `21`, `10.5`, `27`) | Por defecto `21` cuando se omite. |
-| `CONDICION_IVA_RECEPTOR` | No | Código entero `1..16` | Se mapea a condición IVA del receptor en AFIP. Por defecto `6` cuando falta o es inválido. |
-| `FECHA_SERVICIO_DESDE` | No | `dd/MM/yyyy` o `yyyy-MM-dd` | Fecha opcional de inicio del período de servicio. |
-| `FECHA_SERVICIO_HASTA` | No | `dd/MM/yyyy` o `yyyy-MM-dd` | Fecha opcional de fin del período de servicio. |
-| `FECHA_VTO_PAGO` | No | `dd/MM/yyyy` o `yyyy-MM-dd` | Fecha opcional de vencimiento de pago. |
-| `MATRICULA` / `HOSPEDAJE` / `SERVICIOS` / `MES` / `RESIDENTE` | No | Campos legacy de texto/monto | Se usan solo para construir el concepto de respaldo cuando `CONCEPTO` está vacío. |
-| `NRO_COMP` | No | Cualquier string | Aceptado pero actualmente no se usa en el mapeo del parser. |
+| `IVA_GRAVADO` | No | Número (porcentaje) | **Solo Factura A/B** (ignorado en C). Default: `100`, salvo que `IVA_EXENTO` > 0: entonces `100 - IVA_EXENTO`. |
+| `IVA_EXENTO` | No | `true`/`false`, `si`/`sí`/`no`, o número (porcentaje) | **Solo Factura A/B** (ignorado en C). Default: `0`. `true`/`si` = 100% exento. Valores no reconocidos se ignoran con warning. Alias: `IVA_EXCEMPT` (typo legacy). ⚠️ Cambio vs versiones anteriores: `sí` (con tilde), porcentajes con `%` y decimales con coma antes se ignoraban en silencio (se facturaba con IVA completo); ahora se interpretan como exención **con warning**. Corré `dry_run_csv` antes de re-emitir CSVs históricos. |
+| `ALICUOTA_IVA` | No | Número (ej. `21`, `10.5`, `27`) | **Solo Factura A/B** (ignorado en C). Default: `21`, salvo `IVA_EXENTO=100`: entonces `0`. |
+| `CONDICION_IVA_RECEPTOR` | No | Código válido (`1`, `4`, `5`, `6`, `7`, `8`, `9`, `10`, `13`, `15`, `16`) o etiqueta de texto | Condición IVA del receptor. Default `6` cuando falta; valores no reconocidos (incluidos `2`, `3`, `11`, `12`, `14`) caen a `6` **con warning**. Etiquetas de texto (ej. `Consumidor Final`) se interpretan **con warning informativo**. |
+| `PERIODO_DESDE` / `FECHA_SERVICIO_DESDE` | No | `dd/MM/yyyy` o `yyyy-MM-dd` | Inicio del período de servicio. Si falta: primer día del mes de emisión. |
+| `PERIODO_HASTA` / `FECHA_SERVICIO_HASTA` | No | `dd/MM/yyyy` o `yyyy-MM-dd` | Fin del período de servicio. Si falta: último día del mes de emisión. Si el período queda invertido, el emisor usa el mes de emisión con warning. |
+| `FECHA_VTO_PAGO` | No | `dd/MM/yyyy` o `yyyy-MM-dd` | Vencimiento de pago. Si falta: último día del mes de emisión. Si es anterior a la emisión (AFIP lo rechaza), se usa el último día del mes de emisión con warning. |
+| `MATRICULA` / `SERVICIOS` / `MES` / `RESIDENTE` | No | Campos legacy de texto | Se usan solo para construir el concepto de respaldo cuando `CONCEPTO` está vacío. Dejar vacíos. |
+| `HOSPEDAJE` | No | — | **Se acepta pero su valor se ignora**: el importe sale exclusivamente de `TOTAL`. No duplicar el monto acá. |
+| `NRO_COMP` | No | Cualquier string | Aceptado pero ignorado (la numeración la asigna AFIP). |
 
 Aliases aceptados para el header de método de pago:
 
 - `FORMA_DE_PAGO` (recomendado)
 - `METODO_PAGO`
 - `FORMA_PAGO` / `FORMAPAGO`
-- `CONDICION_DE_VENTA` / `CONDICIONDEVENTA`
+- `CONDICION_DE_VENTA` / `CONDICIONDEVENTA` / `CONDICION VENTA`
 
 Headers requeridos por el parser (mínimos para validación estructural):
 
@@ -310,7 +325,8 @@ Códigos soportados de `CONDICION_IVA_RECEPTOR`:
 Notas:
 
 - En la automatización UI actual, los flujos con `DNI` fuerzan condición IVA `5` (Consumidor final).
-- Para `CUIT`/`CUIL`, `CONDICION_IVA_RECEPTOR` se respeta (o hace fallback a `6` si falta o es inválido).
+- Para `CUIT`/`CUIL`, `CONDICION_IVA_RECEPTOR` se respeta (o hace fallback a `6` si falta o es inválido, con warning).
+- Si la condición pedida **explícitamente** en el CSV no existe en el selector del portal, la fila falla con error claro (antes se seleccionaba la primera opción en silencio). Si la condición era el default implícito, se usa la primera opción del portal y se reporta warning.
 
 ### Store de clientes (CRUD)
 
@@ -324,10 +340,12 @@ Los tools de gestión de clientes permiten guardar, listar, actualizar y elimina
   "AFIP_PASSWORD": "mi-password",
   "AFIP_ISSUER_CUIT": "20999888776",
   "businessName": "Mi Empresa SRL",
-  "pointsOfSale": ["1", "3", "5"],
-  "defaultPointOfSale": "3"
+  "pointsOfSale": ["00001", "00003", "00005"],
+  "defaultPointOfSale": "00003"
 }
 ```
+
+> Los puntos de venta deben coincidir **exactamente** con el value del selector de AFIP (ej. `"00003"`, no `"3"`). El valor `"1"` significa "primera opción disponible" (compatibilidad legacy).
 
 **Listar clientes (`list_clients`):** sin parámetros requeridos. Devuelve todos los clientes con credenciales enmascaradas.
 
@@ -337,7 +355,7 @@ Los tools de gestión de clientes permiten guardar, listar, actualizar y elimina
 {
   "AFIP_ISSUER_CUIT": "20999888776",
   "AFIP_PASSWORD": "nueva-password",
-  "pointsOfSale": ["1", "3", "5", "7"]
+  "pointsOfSale": ["00001", "00003", "00005", "00007"]
 }
 ```
 

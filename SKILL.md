@@ -74,10 +74,12 @@ The client store persists AFIP credentials and points of sale in local SQLite (`
   "AFIP_PASSWORD": "my-password",
   "AFIP_ISSUER_CUIT": "20999888776",
   "businessName": "My Company SRL",
-  "pointsOfSale": ["1", "3"],
-  "defaultPointOfSale": "1"
+  "pointsOfSale": ["00001", "00003"],
+  "defaultPointOfSale": "00001"
 }
 ```
+
+Point-of-sale values must match the AFIP `<select>` option values exactly (e.g. `"00003"`, not `"3"`); the literal `"1"` means "first available option" (legacy).
 
 ### List stored clients
 
@@ -91,7 +93,7 @@ Only provide the fields you want to change. The client must already exist.
 {
   "AFIP_ISSUER_CUIT": "20999888776",
   "AFIP_PASSWORD": "new-password",
-  "pointsOfSale": ["1", "3", "5"]
+  "pointsOfSale": ["00001", "00003", "00005"]
 }
 ```
 
@@ -134,38 +136,37 @@ When the user provides a PDF or image instead of a CSV, extract the fields by re
 
 | CSV field | Where to find it in the document |
 |---|---|
-| `MES` | Month name of the billing period (e.g. `MARZO`, `ABRIL`). If unclear, use the month of `FECHA`. |
-| `COMPROBANTE` | Invoice type: `Factura C`, `Factura A`, `Factura B`. Determines the AFIP form flow (see Factura A section below). |
-| `NRO_COMP` | "Punto de Venta: Comp. Nro" — format as `XXXXX-XXXXXXXXX` (e.g. `00002-00000115`). Leave blank if not available. |
+| `COMPROBANTE` | Invoice type: `Factura C`, `Factura A`, `Factura B`. Determines the AFIP form flow (see Factura A section below). Credit/debit notes and receipts are NOT supported — the row is rejected. |
 | `FECHA` | Emission date in `DD/MM/YYYY` format. Found as "Fecha de Emisión". |
 | `CONCEPTO` | Description of the service or product. Usually the item description line. |
-| `SERVICIOS` | Legacy optional field. Keep empty by default unless the user explicitly provides/requests it. |
 | `FORMA_DE_PAGO` | Payment condition (e.g. `Transferencia Bancaria`, `Contado`). |
-| `TOTAL` | "Importe Total" — the grand total amount. For IVA-exempt Factura A, this equals the net amount. |
+| `TOTAL` | "Importe Total". Final amount for Factura B/C. For Factura A it is the NET amount (AFIP adds 21% IVA on top unless `IVA_EXENTO=true`). |
 | `PAGADOR` | "Apellido y Nombre / Razón Social" of the receiver/client. |
 | `TIPO_DOC` | Document type of the receiver. Use `CUIT` when a CUIT is shown. Use `DNI` only when only a DNI is shown. |
 | `DOCUMENTO` | The CUIT or DNI number of the receiver. |
 | `DIRECCION` | Receiver's address. Found as "Domicilio" in the receiver section. |
-| `CONDICION_IVA_RECEPTOR` | IVA condition of the receiver. Accepts numeric codes or text labels (see table below). |
-| `PERIODO_DESDE` | Service period start date in `DD/MM/YYYY`. Alias for `FECHA_SERVICIO_DESDE`. If omitted, auto-calculated from `FECHA`. |
-| `PERIODO_HASTA` | Service period end date in `DD/MM/YYYY`. Alias for `FECHA_SERVICIO_HASTA`. If omitted, auto-calculated from `FECHA`. |
-| `IVA_EXENTO` | Set to `true` for IVA-exempt invoices (Factura A). Accepts `true`/`si`/`yes` or a percentage (e.g. `100`). |
+| `CONDICION_IVA_RECEPTOR` | IVA condition of the receiver. Accepts valid numeric codes or text labels (see table below). |
+| `PERIODO_DESDE` | Optional for any comprobante. Service period start date in `DD/MM/YYYY`. Alias for `FECHA_SERVICIO_DESDE`. If omitted, auto-calculated from `FECHA`. For Factura C include it only when the service period differs from the emission month. |
+| `PERIODO_HASTA` | Optional for any comprobante. Service period end date in `DD/MM/YYYY`. Alias for `FECHA_SERVICIO_HASTA`. If omitted, auto-calculated from `FECHA`. For Factura C include it only when the service period differs from the emission month. |
+| `FECHA_VTO_PAGO` | Optional for any comprobante. Payment due date in `DD/MM/YYYY`. Must NOT be earlier than `FECHA` (AFIP rejects it; the issuer falls back to end of emission month with a warning). |
+| `IVA_EXENTO` | Factura A/B only (IGNORED for Factura C). Set to `true` for IVA-exempt invoices. Accepts `true`/`si`/`sí`/`yes` or a percentage (e.g. `100`). Note: values older versions silently ignored (`sí` with accent, `100%`, `10,5`) now take effect, with a warning in `dry_run_csv`. |
 
-Fields not present in the document (e.g. `MATRICULA`, `HOSPEDAJE`, `SERVICIOS`, `RESIDENTE`) should be left empty.
-`TOTAL` is the authoritative amount for invoice emission.
+Legacy fields (`MES`, `NRO_COMP`, `MATRICULA`, `HOSPEDAJE`, `SERVICIOS`, `RESIDENTE`) should be LEFT OUT of the CSV — do not extract them. `HOSPEDAJE` and `NRO_COMP` values are ignored entirely; the others only feed a fallback concept when `CONCEPTO` is empty.
+`TOTAL` is the authoritative amount for invoice emission. Never duplicate it into `HOSPEDAJE`.
+For Factura C (monotributo), `IVA_GRAVADO`/`IVA_EXENTO`/`ALICUOTA_IVA` are IGNORED: do not include them.
 
 ### Real examples extracted from reference invoices
 
 **Factura C — Monotributo to Responsable Inscripto:**
 ```
-MES,COMPROBANTE,FECHA,CONCEPTO,FORMA_DE_PAGO,TOTAL,PAGADOR,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR
-MARZO,Factura C,15/03/2026,Desarrollo de software,Transferencia Bancaria,500,EMPRESA COPADA SRL,CUIT,30711111119,"Mitre 345, Rosario, Santa Fe",1
+FECHA,COMPROBANTE,CONCEPTO,FORMA_DE_PAGO,TOTAL,PAGADOR,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR
+15/03/2026,Factura C,Desarrollo de software,Transferencia Bancaria,500,EMPRESA COPADA SRL,CUIT,30711111119,"Mitre 345, Rosario, Santa Fe",1
 ```
 
 **Factura C — Monotributo to Responsable Monotributo:**
 ```
-MES,COMPROBANTE,FECHA,CONCEPTO,FORMA_DE_PAGO,TOTAL,PAGADOR,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR
-MARZO,Factura C,15/03/2026,Servicio de programacion de software,Transferencia Bancaria,200,PEREZ JUAN,CUIT,20999999990,"Belgrano 780, Córdoba, Córdoba",6
+FECHA,COMPROBANTE,CONCEPTO,FORMA_DE_PAGO,TOTAL,PAGADOR,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR
+15/03/2026,Factura C,Servicio de programacion de software,Transferencia Bancaria,200,PEREZ JUAN,CUIT,20999999990,"Belgrano 780, Córdoba, Córdoba",6
 ```
 
 **Factura A — RI to RI (IVA exempt, with service period):**
@@ -263,12 +264,14 @@ Call `validate_credentials_source` before processing invoices.
 ```
 
 If validation fails, stop and ask the user to correct credentials.
+Note: `validate_credentials_source` does NOT contact AFIP — it only checks that the 4 credential values are present after merging sources. A wrong password still returns `ok:true`.
 
-Credential resolution priority:
+Credential resolution priority (same list as the Client Store section):
 
-1. Explicit `credentials` object.
-2. `credentialsCsvText` with optional `preferredIssuerCuit`.
-3. Stored client via `issuerCuit`.
+1. Explicit `credentials` object (highest priority).
+2. `credentialsCsvText` with optional `preferredIssuerCuit` (row selector only).
+3. Stored client via `issuerCuit` (SQLite).
+4. Interactive prompt — CLI only, never available under MCP.
 
 **WARNING**: Never set `allowInteractivePrompt` to `true` when running as an MCP server — it will break the stdio transport. Always provide `issuerCuit` or `credentials` explicitly.
 
@@ -280,21 +283,33 @@ The MCP input field is always `invoiceCsvText`.
 - If input is XLSX, convert rows to CSV text using the legacy header contract.
 - If input is a PDF or image, extract fields using the mapping table above.
 
-Full legacy header contract:
+Header contract — Monotributo / Factura C (base):
 
-`MES,COMPROBANTE,NRO_COMP,FECHA,CONCEPTO,MATRICULA,HOSPEDAJE,SERVICIOS,FORMA_DE_PAGO,TOTAL,PAGADOR,RESIDENTE,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR,PERIODO_DESDE,PERIODO_HASTA,IVA_EXENTO`
+`FECHA,COMPROBANTE,CONCEPTO,FORMA_DE_PAGO,TOTAL,PAGADOR,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR`
+
+Header contract — Responsable Inscripto / Factura A-B (extended):
+
+`FECHA,COMPROBANTE,CONCEPTO,FORMA_DE_PAGO,TOTAL,PAGADOR,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR,PERIODO_DESDE,PERIODO_HASTA,FECHA_VTO_PAGO,IVA_EXENTO`
+
+Legacy columns (`MES`, `NRO_COMP`, `MATRICULA`, `HOSPEDAJE`, `SERVICIOS`, `RESIDENTE`) are still accepted for old files, but should not be generated.
 
 ### 3) Validate invoices first
 
-Call `dry_run_csv` with:
+Call `dry_run_csv` with the same `now` value you plan to use in `emit_invoice` (so previewed dates match the real run):
 
 ```json
 {
-  "invoiceCsvText": "<legacy-csv-text>"
+  "invoiceCsvText": "<legacy-csv-text>",
+  "now": true
 }
 ```
 
 If `invalidCount > 0`, present invalid rows and stop unless user asks to continue.
+
+Also review and surface to the user:
+
+- `warnings` — values that will be defaulted, corrected or ignored (invalid dates, unrecognized IVA values, text labels being interpreted, ignored legacy columns).
+- `mapperPreview` — per row, exactly what would be sent to AFIP: comprobante type, amounts (`ImpNeto`/`ImpIVA`/`ImpTotal`), receiver IVA condition (and whether it was explicit), and the effective service period / payment due dates. If a row has `mapperError`, it will fail during emission — fix it first.
 
 ### 4) Emit only after confirmation
 
@@ -368,6 +383,8 @@ If `downloadUrl` is absent (server not configured), still report `artifactPath` 
 
 - For DNI flows, AFIP UI may force IVA receiver condition to Consumidor Final.
 - For Monotributo/RI flows, prefer `TIPO_DOC=CUIT` and use `CONDICION_IVA_RECEPTOR` accordingly.
+- Factura C (monotributo) never discriminates IVA: `TOTAL` is the final amount and the IVA columns are ignored.
+- If the CSV explicitly requests a receiver IVA condition that the AFIP form does not offer for that comprobante, the row fails with a clear error (it is never silently replaced). Implicit defaults fall back to the portal's first option with a warning.
 
 ### Factura A specifics
 
@@ -406,6 +423,8 @@ Both numeric codes and Spanish text labels are accepted:
 
 Text labels are case-insensitive and accent-insensitive.
 
+Codes `2`, `3`, `11`, `12` and `14` fall inside 1-16 but are NOT valid receiver codes: they fall back to the default `6` with a warning. When the column is empty, the default is `6` (Responsable Monotributo).
+
 ## Login URL for Responsable Inscripto (`loginUrl`)
 
 By default, the facturador logs in through the Monotributo portal (`system=admin_mono`).
@@ -418,3 +437,5 @@ For Responsable Inscripto taxpayers who don't use the Monotributo portal, pass `
 ```
 
 This skips the Monotributo portal navigation and goes directly to `fe.afip.gob.ar` after login.
+
+**WARNING**: never pass the `system=rcel` URL for a monotributista issuing Factura C — the default Monotributo login is the correct one for them.

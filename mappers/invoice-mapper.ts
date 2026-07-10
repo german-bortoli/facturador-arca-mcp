@@ -89,11 +89,12 @@ export function mapInvoiceData<T extends Columns>(
       documentTypeLabel = 'CONSUMIDOR FINAL';
   }
 
-  // Parse optional columns with defaults
+  // Parse optional columns with defaults.
+  // `|| 'C'` (not `??`) so an empty-string cell also falls back to Factura C.
   const invoiceType = parseInvoiceType(
-    row.FACTURA_TIPO ?? 'C'
+    row.FACTURA_TIPO?.trim() || 'C'
   );
-  const ivaExempt = parsePercentage(row.IVA_EXCEMPT, 0);
+  const ivaExempt = parsePercentage(row.IVA_EXENTO, 0);
   const ivaGravado = parsePercentage(row.IVA_GRAVADO, ivaExempt > 0 ? (100 - ivaExempt) : 100);
   const ivaPercentage = parsePercentage(row.IVA_PERCENTAGE, ivaExempt >= 100 ? 0 : 21);
 
@@ -134,34 +135,44 @@ export function mapInvoiceData<T extends Columns>(
     impOpEx = 0;
     impTotal = total;
     ivaArray = undefined;
+  } else if (invoiceType === 'B') {
+    // Factura B: TOTAL is the final amount (IVA included); the IVA is
+    // discriminated inside it. This matches the AFIP portal, which treats the
+    // line-item value as final for Factura B (the issuer validates
+    // portal impTotal === TOTAL).
+    impOpEx = total * (ivaExempt / 100);
+    const gravadoFinal = total * (ivaGravado / 100);
+    impNeto = ivaPercentage > 0 ? gravadoFinal / (1 + ivaPercentage / 100) : gravadoFinal;
+    impIVA = gravadoFinal - impNeto;
+    impTotal = total;
   } else {
-    // Factura A or B: Calculate IVA
+    // Factura A: TOTAL is the NET amount; IVA is added on top
     impNeto = total * (ivaGravado / 100);
     impIVA = impNeto * (ivaPercentage / 100);
     impOpEx = total * (ivaExempt / 100);
     impTotal = impNeto + impIVA + impOpEx;
+  }
 
-    // Generate IVA alícuotas array if IVA > 0
-    if (impIVA > 0) {
-      // Map IVA percentage to AFIP IVA type ID
-      // Common mappings: 21% = 5, 10.5% = 4, 27% = 6, 0% = 3
-      let ivaId = 5; // Default to 21%
-      if (ivaPercentage === 10.5) {
-        ivaId = 4;
-      } else if (ivaPercentage === 27) {
-        ivaId = 6;
-      } else if (ivaPercentage === 0) {
-        ivaId = 3;
-      }
-
-      ivaArray = [
-        {
-          Id: ivaId,
-          BaseImp: impNeto,
-          Importe: impIVA,
-        },
-      ];
+  // Generate IVA alícuotas array if IVA > 0 (Factura A/B)
+  if (impIVA > 0) {
+    // Map IVA percentage to AFIP IVA type ID
+    // Common mappings: 21% = 5, 10.5% = 4, 27% = 6, 0% = 3
+    let ivaId = 5; // Default to 21%
+    if (ivaPercentage === 10.5) {
+      ivaId = 4;
+    } else if (ivaPercentage === 27) {
+      ivaId = 6;
+    } else if (ivaPercentage === 0) {
+      ivaId = 3;
     }
+
+    ivaArray = [
+      {
+        Id: ivaId,
+        BaseImp: impNeto,
+        Importe: impIVA,
+      },
+    ];
   }
 
 

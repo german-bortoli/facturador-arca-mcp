@@ -12,10 +12,12 @@ RAZON_SOCIAL=...
 INVOICE_SERVER_HOST=http://<your-server-ip-or-domain>
 INVOICE_HTTP_SERVER_PORT=8876
 INVOICE_MCP_SERVER_PORT=9000
+CLIENT_STORE_SECRET_KEY=<random-secret>
 ```
 
 Notes:
 - `INVOICE_SERVER_HOST` should be reachable by your MCP client if you want `downloadUrl` links.
+- `CLIENT_STORE_SECRET_KEY` is required by the recommended flow (`store_client` / `emit_invoice` with `issuerCuit`): it encrypts AFIP passwords in the local SQLite store. Keep it stable — changing it makes previously stored passwords unreadable.
 - Do not commit real credentials.
 
 ## 2) Start the stack
