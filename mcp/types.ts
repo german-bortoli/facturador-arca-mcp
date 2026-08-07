@@ -22,12 +22,6 @@ export interface EmitInvoiceInput {
    * identificar. Confirm with the user before setting it.
    */
   allowUnidentifiedReceivers?: boolean;
-  /**
-   * Run the browser emission as a background job: the call returns a jobId
-   * immediately (before any MCP client timeout) and emit_status reports the
-   * progress and final result. Parse/credential errors still fail fast.
-   */
-  background?: boolean;
   pointOfSale?: string;
   saveSummaryPath?: string;
   summaryFormat?: 'csv' | 'xlsx';
@@ -63,11 +57,6 @@ export interface DryRunCsvInput {
 // Backward-compatible type aliases for older internal references.
 export type EmitInvoicesFromLegacyCsvInput = EmitInvoiceInput;
 export type DryRunLegacyCsvInput = DryRunCsvInput;
-
-export interface EmitStatusInput {
-  /** Job id returned by emit_invoice with background: true. Omit for the latest job. */
-  jobId?: string;
-}
 
 export interface ValidateCredentialsSourceInput {
   credentialsCsvText?: string;

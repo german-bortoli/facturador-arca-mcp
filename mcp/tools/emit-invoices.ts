@@ -1,16 +1,8 @@
 import { DateTime } from 'luxon';
 import { basename } from 'node:path';
 import { parseLegacyInvoiceCsvText } from '../parsers/legacy-invoice-csv';
-import type { LegacyInvoiceParseResult } from '../parsers/legacy-invoice-csv';
 import { resolveCredentials } from '../credentials-resolver';
 import { startInvoiceHttpServer } from '../invoice-http-server';
-import {
-  attachEmitJobProgress,
-  completeEmitJob,
-  createEmitJob,
-  failEmitJob,
-  runningEmitJobId,
-} from '../emit-jobs';
 import type { EmitInvoiceInput } from '../types';
 
 export function getInvoicingDate(now = false): `${string}/${string}/${string}` {
@@ -89,24 +81,6 @@ export async function emitInvoice(input: EmitInvoiceInput) {
     };
   }
 
-  // Emissions share process-wide state (credential env vars, one AFIP portal
-  // session): never run two at once, in any mode.
-  const runningJob = runningEmitJobId();
-  if (runningJob) {
-    return {
-      invoicingDate: getInvoicingDate(Boolean(input.now)),
-      validCount: parsed.valid.length,
-      invalidCount: parsed.invalid.length,
-      invalidRows: parsed.invalid,
-      parseWarnings: parsed.warnings,
-      successCount: 0,
-      failedCount: 0,
-      message:
-        `Ya hay una emisión en curso (jobId ${runningJob}): no se emitió nada. ` +
-        'Consultá su estado con emit_status y reintentá cuando termine.',
-    };
-  }
-
   const credentials = await resolveCredentials({
     explicit: input.credentials,
     credentialsCsvText: input.credentialsCsvText,
@@ -136,40 +110,6 @@ export async function emitInvoice(input: EmitInvoiceInput) {
 
   const headlessUsed = normalizeHeadless(input.headless);
 
-  if (input.background) {
-    // Parse errors, the anonymous-CSV gate and credential problems already
-    // surfaced synchronously above; only the browser flow runs detached.
-    const jobId = createEmitJob(parsed.valid.length);
-    void runEmission(input, parsed, headlessUsed, jobId)
-      .then((result) => completeEmitJob(jobId, result))
-      .catch((error) => {
-        console.error(`[emit-job ${jobId}] failed:`, error);
-        failEmitJob(jobId, error);
-      });
-    return {
-      jobId,
-      status: 'running' as const,
-      invoicingDate: getInvoicingDate(Boolean(input.now)),
-      headlessUsed,
-      validCount: parsed.valid.length,
-      invalidCount: parsed.invalid.length,
-      invalidRows: parsed.invalid,
-      parseWarnings: parsed.warnings,
-      message:
-        `Emisión iniciada en segundo plano (${parsed.valid.length} factura(s)). ` +
-        `Consultá el avance y el resultado con emit_status { "jobId": "${jobId}" }.`,
-    };
-  }
-
-  return runEmission(input, parsed, headlessUsed);
-}
-
-async function runEmission(
-  input: EmitInvoiceInput,
-  parsed: LegacyInvoiceParseResult,
-  headlessUsed: boolean,
-  jobId?: string,
-) {
   const { chromium } = await import('playwright');
   const { navigateToFacturadorPage } = await import('../../functions');
   const { InvoiceIssuer } = await import('../../invoice-issuer');
@@ -196,13 +136,6 @@ async function runEmission(
         getInvoicingDate: () => getInvoicingDate(Boolean(input.now)),
         timeoutMs: 60_000,
       });
-
-      if (jobId) {
-        attachEmitJobProgress(jobId, () => ({
-          successSoFar: issuer.getSuccessResults().length,
-          failedSoFar: issuer.getFailedResults().length,
-        }));
-      }
 
       await issuer.issueAll(parsed.valid);
       if (input.retry) {

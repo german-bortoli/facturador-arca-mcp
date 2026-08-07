@@ -59,7 +59,6 @@ Optional run settings:
 - `pointOfSale` (auto-selected from stored client POS when omitted)
 - `debug`
 - `loginUrl` (use `system=rcel` URL for Responsable Inscripto taxpayers)
-- `background` (STRONGLY recommended on HTTP/remote connectors: returns a `jobId` immediately and the emission runs server-side; poll `emit_status` for progress and the final result. The synchronous mode can exceed the MCP client request timeout, and a timed-out call may still emit server-side, so never blind-retry after a timeout: check `emit_status` or the ARCA portal first.)
 
 ---
 
