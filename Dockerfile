@@ -3,7 +3,13 @@ FROM mcr.microsoft.com/playwright:v1.58.2-noble
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci --no-audit --no-fund
+# Generous retries/timeouts: npm ci pulls native prebuilds (better-sqlite3)
+# from GitHub besides the registry, which times out on slow server networks.
+RUN npm config set fetch-retries 5 \
+  && npm config set fetch-retry-mintimeout 20000 \
+  && npm config set fetch-retry-maxtimeout 120000 \
+  && npm config set fetch-timeout 600000 \
+  && npm ci --no-audit --no-fund
 
 COPY . .
 
