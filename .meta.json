@@ -1,0 +1,29 @@
+{
+  "generatedAt": "2026-08-07T11:23:19.753-03:00",
+  "summaryPath": ".csv",
+  "format": "csv",
+  "includeSuccess": false,
+  "includeFailed": true,
+  "totals": {
+    "total": 1,
+    "success": 0,
+    "failed": 1
+  },
+  "rows": [
+    {
+      "index": 1,
+      "status": "failed",
+      "name": "",
+      "document": "",
+      "total": 75840,
+      "durationMs": 27924,
+      "error": "No selectable options found in dropdown after waiting for dynamic load",
+      "failureCode": "UNKNOWN",
+      "isTimeout": false,
+      "warnings": [
+        "El portal no ofrece una opción de documento \"Sin identificar\"; se deja la opción por defecto sin completar número.",
+        "Receptor sin documento: se deja el número de documento vacío (Consumidor Final sin identificar)."
+      ]
+    }
+  ]
+}

@@ -1124,7 +1124,26 @@ export class InvoiceIssuer {
     await this.page.waitForLoadState('networkidle');
 
     if ((await addressSelect.count()) > 0) {
-      const options = await this.waitForSelectableOptions(addressSelect);
+      // AFIP fills this select from the padrón of the identified receiver.
+      // Without a CUIT/CUIL (Consumidor Final) there is nothing to load: the
+      // select stays empty forever, so use a short wait and move on instead
+      // of timing out the whole row.
+      let options: SelectOptionItem[];
+      try {
+        options = await this.waitForSelectableOptions(
+          addressSelect,
+          documentType === DOCUMENT_TYPES.CONSUMIDOR_FINAL ? 3_000 : 20_000,
+        );
+      } catch (error) {
+        if (documentType === DOCUMENT_TYPES.CONSUMIDOR_FINAL) {
+          warn(
+            'El selector de domicilio no cargó opciones (sin CUIT no hay padrón): ' +
+            'se continúa sin domicilio del receptor (opcional para Consumidor Final).',
+          );
+          return;
+        }
+        throw error;
+      }
       const currentValue = await addressSelect.inputValue();
       if (!currentValue) {
         if (normalizedAddress) {

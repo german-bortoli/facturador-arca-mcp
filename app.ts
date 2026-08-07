@@ -227,10 +227,10 @@ async function askConfirmation(question: string): Promise<string> {
   }
 }
 
-try {
-  await main();
-} catch (e) {
+// No top-level await: tsx compiles this entry to CJS (package.json has no
+// "type": "module"), where TLA is unsupported. Works under bun and tsx alike.
+main().catch((e) => {
   console.error(e);
   process.exit(1);
-}
+});
 

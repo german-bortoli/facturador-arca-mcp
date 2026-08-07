@@ -57,7 +57,7 @@ Optional run settings:
 - `now`
 - `retry`
 - `pointOfSale` (auto-selected from stored client POS when omitted)
-- `debug`
+- `debug` (NEVER send it unless the user explicitly asks for a debug/test run: `debug: true` fills the AFIP form but never confirms, so NO invoice is issued even when the run reports success. For a safe preview use `dry_run_csv`, not `debug`.)
 - `loginUrl` (use `system=rcel` URL for Responsable Inscripto taxpayers)
 
 ---

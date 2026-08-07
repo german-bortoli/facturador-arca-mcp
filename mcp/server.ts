@@ -67,7 +67,8 @@ const tools: Tool[] = [
     description:
       'Issues AFIP invoices from legacy CSV text. ' +
       'Credentials: pass issuerCuit to use a stored client (saved via store_client), OR pass an explicit credentials object. ' +
-      'Call list_clients first to check for stored clients.',
+      'Call list_clients first to check for stored clients. ' +
+      'Do NOT pass debug unless the user explicitly asks for a debug/test run (debug: true fills the form but issues NOTHING).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -181,7 +182,11 @@ const tools: Tool[] = [
         },
         debug: {
           type: 'boolean',
-          description: 'Keep issuer flow in debug mode (no final issue submission).',
+          description:
+            'NEVER set this unless the user EXPLICITLY asks for a debug/test run. ' +
+            'debug: true fills the AFIP form but never confirms: NO invoice is issued, even when the ' +
+            'run reports success. Sending it "just in case" silently turns a real emission into a no-op. ' +
+            'For a safe preview use dry_run_csv instead. Leave unset for normal emission.',
         },
         loginUrl: {
           type: 'string',
@@ -610,7 +615,7 @@ Read the \`SKILL.md\` resource for the complete field mapping table, IVA conditi
 2. **Build CSV** — use the \`build_invoice_csv_from_input\` prompt if needed.
 3. **Dry run** — call \`dry_run_csv\`. Stop if \`invalidCount > 0\`. Review \`warnings\` (defaulted/ignored values) and \`mapperPreview\` (amounts, comprobante type, receiver IVA condition, effective dates) — surface anything unexpected to the user.
 4. **Confirm** — present invoice count, totals, receiver names, and any dry-run warnings. **Do not proceed without user confirmation.**
-5. **Emit** — call \`emit_invoice\` with \`now: true\` and \`issuerCuit\` (or \`credentials\` object). ONLY for Responsable Inscripto taxpayers (Factura A/B, never Monotributo/Factura C), add \`loginUrl: "https://auth.afip.gob.ar/contribuyente_/login.xhtml?action=SYSTEM&system=rcel"\`.
+5. **Emit** — call \`emit_invoice\` with \`now: true\` and \`issuerCuit\` (or \`credentials\` object). Do NOT pass \`debug\` unless the user explicitly asked for a debug/test run: \`debug: true\` silently skips the final confirmation and NO invoice is issued. ONLY for Responsable Inscripto taxpayers (Factura A/B, never Monotributo/Factura C), add \`loginUrl: "https://auth.afip.gob.ar/contribuyente_/login.xhtml?action=SYSTEM&system=rcel"\`.
 6. **Report** — show success/failed counts and any per-invoice \`warnings\`. Render \`downloadUrl\` links if present.
 
 Notes:
@@ -620,6 +625,7 @@ Notes:
 - For Factura A (RI to RI): set \`IVA_EXENTO=true\` in the CSV for exempt invoices. Use \`PERIODO_DESDE\`/\`PERIODO_HASTA\` for explicit service periods.
 - Without \`IVA_EXENTO=true\`, Factura A defaults to 21% IVA added on top of TOTAL (TOTAL is the NET amount).
 - Safety: never print raw credentials, never guess CUIT/DNI, retry with \`now: true\` if AFIP rejects the date, and never proceed when the service end date is earlier than the start date or \`FECHA_VTO_PAGO\` is earlier than \`FECHA\` (ask the user to correct first).
+- NEVER send \`debug: true\` unless the user explicitly asked for a debug/test run: it fills the AFIP form but never confirms, so no invoice is issued even though the run looks successful. \`dry_run_csv\` is the correct preview tool.
 
 Read the \`SKILL.md\` resource for full payload examples, Factura A specifics, and AFIP behavior notes.`,
         },
