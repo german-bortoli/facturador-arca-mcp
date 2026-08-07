@@ -176,6 +176,27 @@ describe('mapInvoiceData — consumidor final sin identificar', () => {
     expect(invoiceData.CondicionIVAReceptorId).toBe(1);
   });
 
+  test('AFIP literal codes TIPO_DOC=99 / DOCUMENTO=0 behave as sin identificar', () => {
+    // Real-world input: users who know the AFIP tables write the codes.
+    const { invoiceData, documentTypeLabel, isConsumidorFinal } = mapInvoiceData(
+      buildRow({ NOMBRE: 'Consumidor Final', TIPO_DOCUMENTO: '99', NUMERO: '0' }),
+    );
+    expect(invoiceData.DocTipo).toBe(99);
+    expect(invoiceData.DocNro).toBe(0);
+    expect(invoiceData.CondicionIVAReceptorId).toBe(5);
+    expect(documentTypeLabel).toBe('CONSUMIDOR FINAL');
+    expect(isConsumidorFinal).toBe(true);
+  });
+
+  test('AFIP numeric code TIPO_DOC=80 maps to CUIT', () => {
+    const { invoiceData, documentTypeLabel } = mapInvoiceData(
+      buildRow({ TIPO_DOCUMENTO: '80', NUMERO: '30999888770' }),
+    );
+    expect(invoiceData.DocTipo).toBe(80);
+    expect(invoiceData.DocNro).toBe(30999888770);
+    expect(documentTypeLabel).toBe('CUIT');
+  });
+
   test('default stays 6 when a document number is present without TIPO_DOCUMENTO (legacy flow)', () => {
     const { invoiceData } = mapInvoiceData(
       buildRow({ TIPO_DOCUMENTO: '', NUMERO: '20999888776' }),

@@ -1,6 +1,10 @@
 import { DateTime } from 'luxon';
 import z from 'zod';
-import { cleanDocumentNumber, normalizeDocumentType, parseAmount } from '../utils/data-cleaner';
+import {
+  normalizeDocumentType,
+  normalizeOptionalDocumentNumber,
+  parseAmount,
+} from '../utils/data-cleaner';
 
 export interface ParseXlsxOptions {
   /**
@@ -80,7 +84,9 @@ const columnsShape = {
   // For CUIT the address is picked up automatically at AFIP
   DOMICILIO: z.string().nullish(),
   TIPO_DOCUMENTO: z.string().transform(val => normalizeDocumentType(val)),
-  NUMERO: z.string().transform(val => cleanDocumentNumber(val)),
+  // "0" / "-" / "." are "no document" spellings and normalize to '' so the
+  // row is treated as Consumidor Final sin identificar everywhere downstream.
+  NUMERO: z.string().transform(val => normalizeOptionalDocumentNumber(val)),
   CONCEPTO: z.string(),
   COD: z.string().nullish(),
   METODO_PAGO: z.string().nullish(), // Optional: payment method label/value (default in UI flow: "Otros")

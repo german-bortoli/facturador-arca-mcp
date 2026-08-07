@@ -71,15 +71,44 @@ export function parseAmount(amount: string | number): number {
 }
 
 /**
- * Normalize document type strings (case-insensitive)
+ * AFIP numeric document-type codes accepted as TIPO_DOC aliases. Users who
+ * know the AFIP tables naturally write the code (99 = sin identificar).
+ */
+const DOCUMENT_TYPE_CODE_ALIASES: Record<string, string> = {
+  '80': 'CUIT',
+  '86': 'CUIL',
+  '96': 'DNI',
+  '99': 'CONSUMIDOR FINAL',
+};
+
+/**
+ * Normalize document type strings (case-insensitive). AFIP numeric codes map
+ * to their label so "99" behaves exactly like an empty/consumidor-final type.
  * @param type - Document type string
  * @returns Normalized document type
  * @example
  * normalizeDocumentType("cuit") // "CUIT"
  * normalizeDocumentType("DNI") // "DNI"
+ * normalizeDocumentType("80") // "CUIT"
+ * normalizeDocumentType("99") // "CONSUMIDOR FINAL"
  */
 export function normalizeDocumentType(type: string): string {
-  return type.toUpperCase().trim();
+  const normalized = type.toUpperCase().trim();
+  return DOCUMENT_TYPE_CODE_ALIASES[normalized] ?? normalized;
+}
+
+/**
+ * Cleans a RECEIVER document number treating "no document" spellings as empty:
+ * separators only ('-', '.') and all-zero values ('0', '000', the literal
+ * DocNro used by AFIP for an unidentified receiver) normalize to ''.
+ * @example
+ * normalizeOptionalDocumentNumber("20 999 888 776") // "20999888776"
+ * normalizeOptionalDocumentNumber("0") // ""
+ * normalizeOptionalDocumentNumber("-") // ""
+ */
+export function normalizeOptionalDocumentNumber(raw: string): string {
+  const cleaned = cleanDocumentNumber(raw.trim());
+  return /^0*$/.test(cleaned) ? '' : cleaned;
 }
 
 /**

@@ -2,6 +2,7 @@ import { describe, test, expect } from 'vitest';
 import {
   cleanDocumentNumber,
   normalizeDocumentType,
+  normalizeOptionalDocumentNumber,
   parseAmount,
   parsePercentage,
   parseInvoiceType,
@@ -373,5 +374,35 @@ describe('makeCurrencyParser', () => {
     expect(parser('$10.5')).toBe(10.5);
     expect(parser('$10.50')).toBe(10.50);
     expect(parser('$10.505')).toBe(10.505);
+  });
+});
+
+describe('normalizeDocumentType — AFIP numeric code aliases', () => {
+  test.each([
+    ['80', 'CUIT'],
+    ['86', 'CUIL'],
+    ['96', 'DNI'],
+    ['99', 'CONSUMIDOR FINAL'],
+    [' 99 ', 'CONSUMIDOR FINAL'],
+    ['cuit', 'CUIT'],
+    ['PASAPORTE', 'PASAPORTE'],
+    ['', ''],
+  ])('normalizeDocumentType(%j) -> %j', (input, expected) => {
+    expect(normalizeDocumentType(input)).toBe(expected);
+  });
+});
+
+describe('normalizeOptionalDocumentNumber — "no document" spellings', () => {
+  test.each([
+    ['0', ''],
+    ['000', ''],
+    ['-', ''],
+    ['.', ''],
+    ['- -', ''],
+    ['', ''],
+    ['20 999 888 776', '20999888776'],
+    ['30.111.222', '30111222'],
+  ])('normalizeOptionalDocumentNumber(%j) -> %j', (input, expected) => {
+    expect(normalizeOptionalDocumentNumber(input)).toBe(expected);
   });
 });

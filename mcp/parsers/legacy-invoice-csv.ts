@@ -2,7 +2,8 @@ import { parse } from 'csv-parse/sync';
 import { DateTime } from 'luxon';
 import { ColumnsSchema, parseIvaExentoValue, type Columns } from '../../types/file';
 import {
-  cleanDocumentNumber,
+  normalizeDocumentType,
+  normalizeOptionalDocumentNumber,
   resolveIvaReceiverCode,
   VALID_IVA_RECEIVER_CODES,
 } from '../../utils/data-cleaner';
@@ -314,10 +315,10 @@ function collectRowWarnings(
   const push = (message: string) => warnings.push({ rowNumber, message });
   const rawValue = (key: string) => String(mappedRow[key] ?? '').trim();
 
-  const tipoDoc = rawValue('TIPO_DOC').toUpperCase();
-  // Cleaned like the schema's NUMERO transform, so placeholder cells made of
-  // separators ('-', '.') are treated as empty here too.
-  const documento = cleanDocumentNumber(rawValue('DOCUMENTO'));
+  // Normalized like the schema transforms, so AFIP codes ("99") and
+  // placeholder cells ('0', '-', '.') are judged the same way the mapper will.
+  const tipoDoc = normalizeDocumentType(rawValue('TIPO_DOC'));
+  const documento = normalizeOptionalDocumentNumber(rawValue('DOCUMENTO'));
   const isUnidentifiedRow = !documento && !IDENTIFIED_DOC_TYPES.has(tipoDoc);
   if (isUnidentifiedRow) {
     push(
@@ -493,7 +494,7 @@ export function parseLegacyInvoiceCsvText(csvText: string): LegacyInvoiceParseRe
     // A number without a document type is ambiguous (CUIT? DNI?): emitting it
     // would either mis-identify the receiver or submit an inconsistent form.
     const rowTipoDoc = String(mappedRow.TIPO_DOC ?? '').trim();
-    const rowDocumento = cleanDocumentNumber(String(mappedRow.DOCUMENTO ?? '').trim());
+    const rowDocumento = normalizeOptionalDocumentNumber(String(mappedRow.DOCUMENTO ?? ''));
     if (rowDocumento && !rowTipoDoc) {
       invalid.push({
         rowNumber,

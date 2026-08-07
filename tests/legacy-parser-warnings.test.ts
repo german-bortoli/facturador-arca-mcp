@@ -372,3 +372,54 @@ describe('legacy parser — receiver identification edge cases (review fixes)', 
     expect(message).toContain('se usará 6 (Responsable Monotributo)');
   });
 });
+
+describe('legacy parser — AFIP literal codes (99/0) as sin identificar', () => {
+  test('TIPO_DOC=99 with DOCUMENTO=0 parses as unidentified with the informational warning', () => {
+    // Exact shape reported from a real emit_invoice call.
+    const csv = [
+      'FECHA,CONCEPTO,TOTAL,PAGADOR,TIPO_DOC,DOCUMENTO,CONDICION_IVA_RECEPTOR',
+      '06/08/2026,Productos de panaderia,75840,Consumidor Final,99,0,Consumidor Final',
+    ].join('\n');
+
+    const parsed = parseLegacyInvoiceCsvText(csv);
+    expect(parsed.invalid).toHaveLength(0);
+    expect(parsed.valid).toHaveLength(1);
+    expect(parsed.valid[0]!.TIPO_DOCUMENTO).toBe('CONSUMIDOR FINAL');
+    expect(parsed.valid[0]!.NUMERO).toBe('');
+    expect(
+      parsed.warnings.some((w) => w.message.includes('Receptor sin identificar')),
+    ).toBe(true);
+    // It must NOT be treated as an unrecognized doc type with a number.
+    expect(
+      parsed.warnings.some((w) => w.message.includes('no es CUIT/CUIL/DNI')),
+    ).toBe(false);
+  });
+
+  test('TIPO_DOC=80 with a number does not warn (it is a CUIT row)', () => {
+    const csv = [
+      BASE_HEADER,
+      '08/07/2026,Factura C,Servicio,Contado,1000,Cliente Demo,80,20999888776,"Calle 1"',
+    ].join('\n');
+
+    const parsed = parseLegacyInvoiceCsvText(csv);
+    expect(parsed.invalid).toHaveLength(0);
+    expect(parsed.valid[0]!.TIPO_DOCUMENTO).toBe('CUIT');
+    expect(
+      parsed.warnings.some((w) => w.message.includes('no es CUIT/CUIL/DNI')),
+    ).toBe(false);
+  });
+
+  test('DOCUMENTO=0 with empty TIPO_DOC is unidentified, not a row error', () => {
+    const csv = [
+      BASE_HEADER,
+      '08/07/2026,Factura C,Venta,Contado,1000,,,0,',
+    ].join('\n');
+
+    const parsed = parseLegacyInvoiceCsvText(csv);
+    expect(parsed.invalid).toHaveLength(0);
+    expect(parsed.valid).toHaveLength(1);
+    expect(
+      parsed.warnings.some((w) => w.message.includes('Receptor sin identificar')),
+    ).toBe(true);
+  });
+});
