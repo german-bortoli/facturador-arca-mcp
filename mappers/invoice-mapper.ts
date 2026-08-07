@@ -98,9 +98,15 @@ export function mapInvoiceData<T extends Columns>(
   const ivaGravado = parsePercentage(row.IVA_GRAVADO, ivaExempt > 0 ? (100 - ivaExempt) : 100);
   const ivaPercentage = parsePercentage(row.IVA_PERCENTAGE, ivaExempt >= 100 ? 0 : 21);
 
+  // An unidentified receiver (no CUIT/CUIL/DNI and no document number) can
+  // only be invoiced as Consumidor Final, so the default condition is 5 there.
+  // Identified receivers keep the legacy default 6 (Responsable Monotributo).
+  const isUnidentifiedReceiver = isConsumidorFinal && !documentNumber;
   const ivaReceiver = parseIvaReceiverCode(
     row.IVA_RECEIVER,
-    IVA_RECEIVER_CONDITIONS.RESPONSABLE_MONOTRIBUTO
+    isUnidentifiedReceiver
+      ? IVA_RECEIVER_CONDITIONS.CONSUMIDOR_FINAL
+      : IVA_RECEIVER_CONDITIONS.RESPONSABLE_MONOTRIBUTO
   );
 
   // Map invoice type to AFIP code

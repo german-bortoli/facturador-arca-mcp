@@ -20,10 +20,61 @@ import { resolveIvaReceiverCode } from './utils/data-cleaner';
 import { DOCUMENT_TYPES, INVOICE_TYPES, IVA_RECEIVER_CONDITIONS } from './types/invoice';
 import type { AfipInvoiceData } from './types/invoice';
 
-interface SelectOptionItem {
+export interface SelectOptionItem {
   index: number;
   value: string;
   text: string;
+}
+
+function normalizeOptionText(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .trim()
+    .toUpperCase();
+}
+
+/**
+ * Resolves which option of the portal's receiver document-type select matches
+ * the requested AFIP document type. Matches by option value first, then by the
+ * CSV label (only when non-empty: an empty label must NOT match every option).
+ * For CONSUMIDOR_FINAL (99) it falls back to the portal's "unidentified"
+ * labels, which vary across taxpayer profiles. Returns undefined when nothing
+ * matches (the caller decides whether that is fatal).
+ */
+export function matchReceiverDocumentTypeOption(
+  options: SelectOptionItem[],
+  documentType: number,
+  documentLabelRaw: string,
+): SelectOptionItem | undefined {
+  const requestedValue = String(documentType);
+  const byValue = options.find((option) => option.value === requestedValue);
+  if (byValue) {
+    return byValue;
+  }
+
+  const normalizedLabel = normalizeOptionText(documentLabelRaw);
+  if (normalizedLabel) {
+    const byLabel = options.find((option) =>
+      normalizeOptionText(option.text).includes(normalizedLabel),
+    );
+    if (byLabel) {
+      return byLabel;
+    }
+  }
+
+  if (documentType === DOCUMENT_TYPES.CONSUMIDOR_FINAL) {
+    return options.find((option) => {
+      const text = normalizeOptionText(option.text);
+      return (
+        text.includes('SIN IDENTIFICAR') ||
+        text.includes('CONSUMIDOR FINAL') ||
+        text.includes('OTRO')
+      );
+    });
+  }
+
+  return undefined;
 }
 
 export interface SaveSummaryOptions {
@@ -535,12 +586,9 @@ export class InvoiceIssuer {
     await this.failFastOnKnownDateValidationError();
 
     const { invoiceData, ivaConditionLabel } = mapInvoiceData(inv);
+    // DocTipo 99 (Consumidor Final sin identificar) is a valid receiver: the
+    // portal accepts it without document number, name or address.
     const documentType = invoiceData.DocTipo;
-    if (!documentType) {
-      throw new Error(
-        `Document Type is mandatory and should either be DNI, CUIT or CUIL ${inv.TIPO_DOCUMENTO}`,
-      );
-    }
 
     const ivaReceiverSelect = this.page.locator('select[name="idIVAReceptor"]');
     try {
@@ -566,19 +614,28 @@ export class InvoiceIssuer {
     );
     const ivaExplicitlyRequested =
       ivaResolution.source === 'numeric' || ivaResolution.source === 'label';
-    // AFIP usually requires "Consumidor final" when customer document type is DNI.
-    const requestedIva = documentType === DOCUMENT_TYPES.DNI
+    // AFIP usually requires "Consumidor final" when customer document type is
+    // DNI. A receiver without any identification (no TIPO_DOC/DOCUMENTO) can
+    // only be invoiced as Consumidor Final, so it forces condition 5 too.
+    const isUnidentifiedReceiver =
+      documentType === DOCUMENT_TYPES.CONSUMIDOR_FINAL &&
+      inv.NUMERO.trim().length === 0;
+    const forcesConsumidorFinal =
+      documentType === DOCUMENT_TYPES.DNI || isUnidentifiedReceiver;
+    const requestedIva = forcesConsumidorFinal
       ? '5'
       : String(invoiceData.CondicionIVAReceptorId);
 
     if (
-      documentType === DOCUMENT_TYPES.DNI &&
+      forcesConsumidorFinal &&
       ivaExplicitlyRequested &&
       String(invoiceData.CondicionIVAReceptorId) !== requestedIva
     ) {
       warn(
         `CONDICION_IVA_RECEPTOR ${invoiceData.CondicionIVAReceptorId} (${ivaConditionLabel}) ignorada: ` +
-        'TIPO_DOC=DNI fuerza Consumidor Final (5) en el portal.',
+        (documentType === DOCUMENT_TYPES.DNI
+          ? 'TIPO_DOC=DNI fuerza Consumidor Final (5) en el portal.'
+          : 'un receptor sin identificar fuerza Consumidor Final (5) en el portal.'),
       );
     }
 
@@ -587,7 +644,7 @@ export class InvoiceIssuer {
       await ivaReceiverSelect.selectOption({ index: matchedIva.index });
     } else if (
       ivaExplicitlyRequested &&
-      (documentType !== DOCUMENT_TYPES.DNI ||
+      (!forcesConsumidorFinal ||
         String(invoiceData.CondicionIVAReceptorId) === requestedIva)
     ) {
       // The condition was explicitly requested in the CSV: selecting a
@@ -621,7 +678,7 @@ export class InvoiceIssuer {
     }
 
     if (docTypeSelectVisible) {
-      await this.selectReceiverDocumentType(documentType, inv.TIPO_DOCUMENTO);
+      await this.selectReceiverDocumentType(documentType, inv.TIPO_DOCUMENTO, warn);
     }
 
     const receiverDocInput = this.page.locator('input[name="nroDocReceptor"]').first();
@@ -638,16 +695,22 @@ export class InvoiceIssuer {
         // The receiver section renders as a unit: if the number input is
         // visible now, a doc-type select that appeared late is visible too.
         if (await docTypeSelect.isVisible()) {
-          await this.selectReceiverDocumentType(documentType, inv.TIPO_DOCUMENTO);
+          await this.selectReceiverDocumentType(documentType, inv.TIPO_DOCUMENTO, warn);
         } else {
           warn(
             'El selector de tipo de documento del receptor no apareció en el formulario; se continúa sin seleccionarlo.',
           );
         }
       }
-      await receiverDocInput.fill(inv.NUMERO);
-      await this.triggerReceiverDocumentBlur(receiverDocInput);
-      receiverDocFilled = inv.NUMERO.trim().length > 0;
+      if (inv.NUMERO.trim().length > 0) {
+        await receiverDocInput.fill(inv.NUMERO);
+        await this.triggerReceiverDocumentBlur(receiverDocInput);
+        receiverDocFilled = true;
+      } else {
+        warn(
+          'Receptor sin documento: se deja el número de documento vacío (Consumidor Final sin identificar).',
+        );
+      }
     } else if (!inv.NUMERO || documentType === DOCUMENT_TYPES.CONSUMIDOR_FINAL) {
       warn(
         'El campo de documento del receptor no está visible y no es requerido para esta condición; se continúa sin identificar al receptor.',
@@ -665,7 +728,7 @@ export class InvoiceIssuer {
         .locator('input[name="razonSocialReceptor"]')
         .fill(inv.NOMBRE);
     }
-    await this.fillReceiverAddress(documentType, inv);
+    await this.fillReceiverAddress(documentType, inv, warn);
 
     // check if this works to await the page to be ready
     await sleep(this.page, 200);
@@ -975,6 +1038,7 @@ export class InvoiceIssuer {
   private async fillReceiverAddress(
     documentType: number,
     inv: Columns,
+    warn: (message: string) => void,
   ): Promise<void> {
     const inputCandidates = [
       'input[name="domicilioReceptor"]',
@@ -1047,6 +1111,12 @@ export class InvoiceIssuer {
       const isEditable = await addressInput.isEditable();
       if (!currentValue && isEditable) {
         if (!normalizedAddress) {
+          if (documentType === DOCUMENT_TYPES.CONSUMIDOR_FINAL) {
+            warn(
+              'DOMICILIO vacío: se continúa sin domicilio del receptor (opcional para Consumidor Final).',
+            );
+            return;
+          }
           throw new Error(`DOMICILIO is required for ${inv.NOMBRE}`);
         }
         await addressInput.fill(normalizedAddress);
@@ -1057,29 +1127,25 @@ export class InvoiceIssuer {
   private async selectReceiverDocumentType(
     documentType: number,
     documentLabelRaw: string,
+    warn: (message: string) => void,
   ): Promise<void> {
     const documentTypeSelect = this.page.locator('select[name="idTipoDocReceptor"]').first();
     await documentTypeSelect.waitFor({ state: 'visible' });
     const options = await this.waitForSelectableOptions(documentTypeSelect, 30_000);
 
-    const requestedValue = String(documentType);
-    const normalizedLabel = documentLabelRaw
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .trim()
-      .toUpperCase();
-
-    const matched = options.find((option) => {
-      const normalizedOptionText = option.text
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .toUpperCase();
-      return option.value === requestedValue || normalizedOptionText.includes(normalizedLabel);
-    });
+    const matched = matchReceiverDocumentTypeOption(options, documentType, documentLabelRaw);
 
     if (!matched) {
+      if (documentType === DOCUMENT_TYPES.CONSUMIDOR_FINAL) {
+        // Unidentified receiver: the portal keeps its default option and the
+        // number is left empty, which AFIP accepts for Consumidor Final.
+        warn(
+          'El portal no ofrece una opci\u00f3n de documento "Sin identificar"; se deja la opci\u00f3n por defecto sin completar n\u00famero.',
+        );
+        return;
+      }
       throw new Error(
-        `Receiver document type "${documentLabelRaw}" (${requestedValue}) not available. Options: ${options.map((option) => `${option.value}:${option.text}`).join(', ')}`,
+        `Receiver document type "${documentLabelRaw}" (${documentType}) not available. Options: ${options.map((option) => `${option.value}:${option.text}`).join(', ')}`,
       );
     }
 

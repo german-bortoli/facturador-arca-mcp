@@ -141,10 +141,10 @@ When the user provides a PDF or image instead of a CSV, extract the fields by re
 | `CONCEPTO` | Description of the service or product. Usually the item description line. |
 | `FORMA_DE_PAGO` | Payment condition (e.g. `Transferencia Bancaria`, `Contado`). |
 | `TOTAL` | "Importe Total". Final amount for Factura B/C. For Factura A it is the NET amount (AFIP adds 21% IVA on top unless `IVA_EXENTO=true`). |
-| `PAGADOR` | "Apellido y Nombre / Razón Social" of the receiver/client. |
-| `TIPO_DOC` | Document type of the receiver. Use `CUIT` when a CUIT is shown. Use `DNI` only when only a DNI is shown. |
-| `DOCUMENTO` | The CUIT or DNI number of the receiver. |
-| `DIRECCION` | Receiver's address. Found as "Domicilio" in the receiver section. |
+| `PAGADOR` | "Apellido y Nombre / Razón Social" of the receiver/client. Leave empty for a Consumidor Final sin identificar. |
+| `TIPO_DOC` | Document type of the receiver. Use `CUIT` when a CUIT is shown. Use `DNI` only when only a DNI is shown. Leave empty (or use `CONSUMIDOR FINAL`) when the client is not identified. |
+| `DOCUMENTO` | The CUIT or DNI number of the receiver. Leave empty for a Consumidor Final sin identificar (the row emits with DocTipo 99, DocNro 0). |
+| `DIRECCION` | Receiver's address. Found as "Domicilio" in the receiver section. Optional for a Consumidor Final sin identificar. |
 | `CONDICION_IVA_RECEPTOR` | IVA condition of the receiver. Accepts valid numeric codes or text labels (see table below). |
 | `PERIODO_DESDE` | Optional for any comprobante. Service period start date in `DD/MM/YYYY`. Alias for `FECHA_SERVICIO_DESDE`. If omitted, auto-calculated from `FECHA`. For Factura C include it only when the service period differs from the emission month. |
 | `PERIODO_HASTA` | Optional for any comprobante. Service period end date in `DD/MM/YYYY`. Alias for `FECHA_SERVICIO_HASTA`. If omitted, auto-calculated from `FECHA`. For Factura C include it only when the service period differs from the emission month. |
@@ -168,6 +168,13 @@ FECHA,COMPROBANTE,CONCEPTO,FORMA_DE_PAGO,TOTAL,PAGADOR,TIPO_DOC,DOCUMENTO,DIRECC
 FECHA,COMPROBANTE,CONCEPTO,FORMA_DE_PAGO,TOTAL,PAGADOR,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR
 15/03/2026,Factura C,Servicio de programacion de software,Transferencia Bancaria,200,PEREZ JUAN,CUIT,20999999990,"Belgrano 780, Córdoba, Córdoba",6
 ```
+
+**Factura C — Monotributo to Consumidor Final sin identificar (no client data):**
+```
+FECHA,COMPROBANTE,CONCEPTO,FORMA_DE_PAGO,TOTAL,PAGADOR,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR
+15/03/2026,Factura C,Venta de productos,Contado,25000,,,,,
+```
+No receiver data is needed: the invoice is emitted with DocTipo 99, DocNro 0 and receiver condition 5 (Consumidor Final). ARCA accepts this while the total stays under the current identification threshold; above it the portal rejects the row and the receiver must be identified.
 
 **Factura A — RI to RI (IVA exempt, with service period):**
 ```
@@ -199,7 +206,7 @@ Do not duplicate the amount in `HOSPEDAJE` or `SERVICIOS` unless the user explic
 
 If any of these fields cannot be reliably extracted, stop and ask the user:
 
-- CUIT or DNI of the receiver (never guess)
+- CUIT or DNI of the receiver (never guess). If the user says the sale is to an unidentified final consumer (no client data available), no receiver fields are needed: leave `PAGADOR`, `TIPO_DOC` and `DOCUMENTO` empty.
 - `CONDICION_IVA_RECEPTOR` if not explicitly stated in the document
 - `CONCEPTO` / `SERVICIOS` if the description is ambiguous
 - `FORMA_DE_PAGO` if not shown
@@ -382,6 +389,7 @@ If `downloadUrl` is absent (server not configured), still report `artifactPath` 
 ## Notes for AFIP Behavior
 
 - For DNI flows, AFIP UI may force IVA receiver condition to Consumidor Final.
+- Unidentified receivers (empty `TIPO_DOC`/`DOCUMENTO`) always emit with condition 5 (Consumidor Final): the default is 5 and any explicit different value is overridden with a warning. ARCA requires identifying the receiver above the current consumidor final threshold; over it, the portal rejects the row.
 - For Monotributo/RI flows, prefer `TIPO_DOC=CUIT` and use `CONDICION_IVA_RECEPTOR` accordingly.
 - Factura C (monotributo) never discriminates IVA: `TOTAL` is the final amount and the IVA columns are ignored.
 - If the CSV explicitly requests a receiver IVA condition that the AFIP form does not offer for that comprobante, the row fails with a clear error (it is never silently replaced). Implicit defaults fall back to the portal's first option with a warning.

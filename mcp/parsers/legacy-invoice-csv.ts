@@ -63,7 +63,16 @@ const LEGACY_FALLBACK_ALIASES: Record<string, string> = {
   CONDICIONVENTA: 'METODO_PAGO',
 };
 
-const REQUIRED_LEGACY_HEADERS = ['TOTAL', 'PAGADOR', 'TIPO_DOC', 'DOCUMENTO'] as const;
+const REQUIRED_LEGACY_HEADERS = ['TOTAL'] as const;
+
+/**
+ * Receiver-identification headers. Optional since Consumidor Final sin
+ * identificar is supported: when absent (or empty per row) the invoice is
+ * issued with DocTipo 99 / DocNro 0 and receiver condition 5.
+ */
+const RECEIVER_ID_HEADERS = ['PAGADOR', 'TIPO_DOC', 'DOCUMENTO'] as const;
+
+const IDENTIFIED_DOC_TYPES = new Set(['CUIT', 'CUIL', 'DNI']);
 
 export interface LegacyInvoiceParseError {
   rowNumber: number;
@@ -154,6 +163,26 @@ function assertRequiredHeaders(rows: Record<string, unknown>[]): void {
   const missing = REQUIRED_LEGACY_HEADERS.filter((header) => !headers.has(header));
   if (missing.length > 0) {
     throw new Error(`Legacy CSV is missing required headers: ${missing.join(', ')}`);
+  }
+}
+
+/**
+ * File-level heads-up when the CSV has no receiver-identification columns at
+ * all: every row will be issued as Consumidor Final sin identificar.
+ */
+function collectMissingReceiverHeaderWarnings(
+  rows: Record<string, unknown>[],
+  warnings: LegacyInvoiceParseWarning[],
+): void {
+  const headers = new Set(rows.flatMap((row) => Object.keys(row)));
+  const missing = RECEIVER_ID_HEADERS.filter((header) => !headers.has(header));
+  if (missing.length > 0) {
+    warnings.push({
+      rowNumber: null,
+      message:
+        `El CSV no tiene columnas ${missing.join(', ')}: las filas sin identificación del receptor ` +
+        'se emiten como Consumidor Final sin identificar (DocTipo 99, DocNro 0, condición IVA 5).',
+    });
   }
 }
 
@@ -273,6 +302,15 @@ function collectRowWarnings(
 ): void {
   const push = (message: string) => warnings.push({ rowNumber, message });
   const rawValue = (key: string) => String(mappedRow[key] ?? '').trim();
+
+  const tipoDoc = rawValue('TIPO_DOC').toUpperCase();
+  const documento = rawValue('DOCUMENTO');
+  if (!documento && !IDENTIFIED_DOC_TYPES.has(tipoDoc)) {
+    push(
+      'Receptor sin identificar: se emite como Consumidor Final (DocTipo 99, DocNro 0, condición IVA 5). ' +
+      'ARCA lo acepta mientras el total no supere el tope vigente que exige identificar al receptor.',
+    );
+  }
 
   const rawComprobante = rawValue('COMPROBANTE') || rawValue('FACTURA_TIPO');
   if (rawComprobante && parseLegacyInvoiceType(rawComprobante) === undefined) {
@@ -396,6 +434,7 @@ export function parseLegacyInvoiceCsvText(csvText: string): LegacyInvoiceParseRe
   const warnings: LegacyInvoiceParseWarning[] = [];
 
   collectHeaderCollisionWarnings(rawRows, warnings);
+  collectMissingReceiverHeaderWarnings(mappedRows, warnings);
 
   for (const { column, message } of IGNORED_VALUE_COLUMNS) {
     if (mappedRows.some((row) => String(row[column] ?? '').trim().length > 0)) {

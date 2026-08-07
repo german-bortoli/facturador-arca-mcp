@@ -238,3 +238,55 @@ describe('legacy parser — warnings', () => {
     expect(parsed.valid[0]!.IVA_EXENTO).toBe(100);
   });
 });
+
+describe('legacy parser — consumidor final sin identificar', () => {
+  test('CSV without receiver columns parses with a file-level warning', () => {
+    const csv = [
+      'FECHA,CONCEPTO,TOTAL',
+      '08/07/2026,Venta mostrador,1000',
+    ].join('\n');
+
+    const parsed = parseLegacyInvoiceCsvText(csv);
+    expect(parsed.invalid).toHaveLength(0);
+    expect(parsed.valid).toHaveLength(1);
+    expect(parsed.valid[0]!.NOMBRE).toBe('');
+    expect(parsed.valid[0]!.NUMERO).toBe('');
+    expect(parsed.valid[0]!.TIPO_DOCUMENTO).toBe('');
+
+    const fileLevel = parsed.warnings.filter((w) => w.rowNumber === null);
+    expect(
+      fileLevel.some((w) => w.message.includes('PAGADOR, TIPO_DOC, DOCUMENTO')),
+    ).toBe(true);
+  });
+
+  test('row with empty receiver cells warns it will be issued unidentified', () => {
+    const csv = [
+      BASE_HEADER,
+      '08/07/2026,Factura C,Venta mostrador,Contado,1000,,,,',
+    ].join('\n');
+
+    const parsed = parseLegacyInvoiceCsvText(csv);
+    expect(parsed.invalid).toHaveLength(0);
+    expect(parsed.valid).toHaveLength(1);
+
+    const rowLevel = parsed.warnings.filter((w) => w.rowNumber === 2);
+    expect(
+      rowLevel.some((w) => w.message.includes('Receptor sin identificar')),
+    ).toBe(true);
+  });
+
+  test('TOTAL header is still required', () => {
+    const csv = ['FECHA,CONCEPTO', '08/07/2026,Venta'].join('\n');
+    expect(() => parseLegacyInvoiceCsvText(csv)).toThrow(
+      /missing required headers: TOTAL/,
+    );
+  });
+
+  test('identified rows do not get the unidentified warning', () => {
+    const csv = [BASE_HEADER, BASE_ROW].join('\n');
+    const parsed = parseLegacyInvoiceCsvText(csv);
+    expect(
+      parsed.warnings.filter((w) => w.message.includes('sin identificar')),
+    ).toHaveLength(0);
+  });
+});

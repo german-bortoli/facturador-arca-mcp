@@ -58,10 +58,15 @@ export function dryRunCsv(input: DryRunCsvInput) {
         getInvoicingDate(Boolean(input.now))) as DisplayDate;
       const period = resolveServicePeriod(row, emissionDate);
 
-      // Mirror the issuer: DNI receivers are always emitted with condition 5
+      // Mirror the issuer: DNI receivers and unidentified receivers (DocTipo
+      // 99 without document number) are always emitted with condition 5
       // (Consumidor Final), regardless of the CSV value.
       const isDni = mapped.invoiceData.DocTipo === DOCUMENT_TYPES.DNI;
-      const effectiveIvaId = isDni
+      const isUnidentifiedReceiver =
+        mapped.invoiceData.DocTipo === DOCUMENT_TYPES.CONSUMIDOR_FINAL &&
+        !mapped.customerDocumentNumber;
+      const forcesConsumidorFinal = isDni || isUnidentifiedReceiver;
+      const effectiveIvaId = forcesConsumidorFinal
         ? IVA_RECEIVER_CONDITIONS.CONSUMIDOR_FINAL
         : mapped.invoiceData.CondicionIVAReceptorId;
       const ivaResolution = resolveIvaReceiverCode(
@@ -72,12 +77,14 @@ export function dryRunCsv(input: DryRunCsvInput) {
         ivaResolution.source === 'numeric' || ivaResolution.source === 'label';
       const rowWarnings = [...period.warnings];
       if (
-        isDni &&
+        forcesConsumidorFinal &&
         ivaExplicitlyRequested &&
         mapped.invoiceData.CondicionIVAReceptorId !== effectiveIvaId
       ) {
         rowWarnings.push(
-          `TIPO_DOC=DNI fuerza condición IVA receptor 5 (Consumidor final): ` +
+          (isDni
+            ? 'TIPO_DOC=DNI fuerza condición IVA receptor 5 (Consumidor final): '
+            : 'Receptor sin identificar fuerza condición IVA receptor 5 (Consumidor final): ') +
           `se ignora el valor ${mapped.invoiceData.CondicionIVAReceptorId} (${mapped.ivaConditionLabel}).`,
         );
       }
@@ -92,7 +99,7 @@ export function dryRunCsv(input: DryRunCsvInput) {
         documentNumber: mapped.customerDocumentNumber,
         condicionIvaReceptor: {
           id: effectiveIvaId,
-          label: isDni ? 'Consumidor final' : mapped.ivaConditionLabel,
+          label: forcesConsumidorFinal ? 'Consumidor final' : mapped.ivaConditionLabel,
           explicit: Boolean(row.IVA_RECEIVER?.trim()),
         },
         amounts: {

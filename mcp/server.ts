@@ -78,7 +78,8 @@ const tools: Tool[] = [
             'Raw invoice CSV text. ' +
             'Monotributo / Factura C base headers: FECHA, COMPROBANTE, CONCEPTO, FORMA_DE_PAGO, TOTAL, PAGADOR, TIPO_DOC, DOCUMENTO, DIRECCION, CONDICION_IVA_RECEPTOR. ' +
             'Responsable Inscripto / Factura A-B additionally accepts: IVA_EXENTO, ALICUOTA_IVA, IVA_GRAVADO, PERIODO_DESDE, PERIODO_HASTA, FECHA_VTO_PAGO. ' +
-            'Minimum required headers: TOTAL, PAGADOR, TIPO_DOC, DOCUMENTO. ' +
+            'Minimum required headers: TOTAL. ' +
+            'PAGADOR, TIPO_DOC and DOCUMENTO may be omitted or left empty to invoice a Consumidor Final sin identificar (DocTipo 99, DocNro 0, receiver condition 5); ARCA accepts this while the total stays under the identification threshold. ' +
             'IMPORTANT: the IVA_* columns are IGNORED for Factura C (monotributo) — do not add them there. ' +
             'TOTAL is the final amount for Factura B/C; for Factura A it is the NET amount (21% IVA is added on top unless IVA_EXENTO=true). ' +
             'Legacy columns MES, MATRICULA, RESIDENTE, SERVICIOS only feed the fallback CONCEPTO; HOSPEDAJE and NRO_COMP are accepted but their values are IGNORED — leave them empty. ' +
@@ -477,9 +478,13 @@ const PROMPT_CONTENT: Record<string, (args?: Record<string, string>) => { descri
 
 ## IVA Receiver Condition
 
-\`CONDICION_IVA_RECEPTOR\` accepts valid AFIP receiver codes (1, 4, 5, 6, 7, 8, 9, 10, 13, 15, 16) or Spanish text labels (e.g. \`IVA Responsable Inscripto\`, \`Consumidor Final\`). Labels are case/accent-insensitive. Empty defaults to \`6\` (Responsable Monotributo). Unrecognized values fall back to the default and produce a warning in \`dry_run_csv\`.
+\`CONDICION_IVA_RECEPTOR\` accepts valid AFIP receiver codes (1, 4, 5, 6, 7, 8, 9, 10, 13, 15, 16) or Spanish text labels (e.g. \`IVA Responsable Inscripto\`, \`Consumidor Final\`). Labels are case/accent-insensitive. Empty defaults to \`6\` (Responsable Monotributo) for identified receivers, and to \`5\` (Consumidor Final) for unidentified ones (no TIPO_DOC/DOCUMENTO). Unrecognized values fall back to the default and produce a warning in \`dry_run_csv\`.
 
-Exception: \`TIPO_DOC=DNI\` always emits with condition \`5\` (Consumidor Final); any other value is overridden (with a warning when it was explicit).
+Exceptions: \`TIPO_DOC=DNI\` and unidentified receivers always emit with condition \`5\` (Consumidor Final); any other value is overridden (with a warning when it was explicit).
+
+## Consumidor Final sin identificar
+
+A monotributista can invoice a final consumer without any client data: leave \`PAGADOR\`, \`TIPO_DOC\` and \`DOCUMENTO\` empty (or omit the columns). The invoice is emitted with DocTipo 99, DocNro 0 and receiver condition 5. \`DIRECCION\` is also optional in this case. ARCA accepts this while the total stays under the current identification threshold; above it the portal rejects the row and the receiver must be identified.
 
 Text labels are interpreted to their numeric code and produce one expected informational warning per row in \`dry_run_csv\` — this is normal, not an error; use the numeric code to avoid it.
 
@@ -546,8 +551,8 @@ FECHA,COMPROBANTE,CONCEPTO,FORMA_DE_PAGO,TOTAL,PAGADOR,TIPO_DOC,DOCUMENTO,DIRECC
 ## Checklist — confirm before proceeding
 
 - [ ] COMPROBANTE (Factura A, B, or C — determines AFIP form flow and IVA handling). Credit/debit notes and receipts are NOT supported.
-- [ ] PAGADOR (receiver name)
-- [ ] DOCUMENTO (CUIT/DNI) — never guess, always confirm
+- [ ] PAGADOR (receiver name). Leave empty for a Consumidor Final sin identificar.
+- [ ] DOCUMENTO (CUIT/DNI) — never guess, always confirm. Leave empty (with TIPO_DOC also empty) to invoice a Consumidor Final sin identificar: the row emits with DocTipo 99, DocNro 0 and condition 5.
 - [ ] CONDICION_IVA_RECEPTOR (valid code 1/4/5/6/7/8/9/10/13/15/16 or text label, e.g. \`IVA Responsable Inscripto\`)
 - [ ] TOTAL amount — final amount for Factura B/C; NET amount for Factura A (21% IVA added on top unless IVA_EXENTO=true)
 - [ ] CONCEPTO description
@@ -599,7 +604,8 @@ Read the \`SKILL.md\` resource for the complete field mapping table, IVA conditi
 6. **Report** — show success/failed counts and any per-invoice \`warnings\`. Render \`downloadUrl\` links if present.
 
 Notes:
-- \`CONDICION_IVA_RECEPTOR\` accepts valid AFIP receiver codes (1, 4, 5, 6, 7, 8, 9, 10, 13, 15, 16) or text labels (e.g. \`IVA Responsable Inscripto\`). Empty = 6 (Responsable Monotributo). Text labels produce an expected informational warning in \`dry_run_csv\` (not a problem — confirm the interpreted code and continue). \`TIPO_DOC=DNI\` always emits with condition 5.
+- \`CONDICION_IVA_RECEPTOR\` accepts valid AFIP receiver codes (1, 4, 5, 6, 7, 8, 9, 10, 13, 15, 16) or text labels (e.g. \`IVA Responsable Inscripto\`). Empty = 6 (Responsable Monotributo) for identified receivers, 5 (Consumidor Final) for unidentified ones. Text labels produce an expected informational warning in \`dry_run_csv\` (not a problem — confirm the interpreted code and continue). \`TIPO_DOC=DNI\` and unidentified receivers always emit with condition 5.
+- Consumidor Final sin identificar: PAGADOR/TIPO_DOC/DOCUMENTO empty (or absent) is valid and emits DocTipo 99, DocNro 0, condition 5. The related dry-run warnings are informational, not errors.
 - Factura C (monotributo) ignores \`IVA_EXENTO\`/\`ALICUOTA_IVA\`/\`IVA_GRAVADO\`: TOTAL is always the final amount.
 - For Factura A (RI to RI): set \`IVA_EXENTO=true\` in the CSV for exempt invoices. Use \`PERIODO_DESDE\`/\`PERIODO_HASTA\` for explicit service periods.
 - Without \`IVA_EXENTO=true\`, Factura A defaults to 21% IVA added on top of TOTAL (TOTAL is the NET amount).

@@ -33,6 +33,7 @@ This file defines generic guidance for AI/code agents working in this repository
 - AFIP date validation can fail if invoice date is older than previously issued vouchers.
   - If needed, use current date behavior (`now: true`) and/or update `FECHA`.
 - DNI flows may force IVA receiver condition to Consumidor Final in AFIP UI.
+- Unidentified receivers (empty `TIPO_DOC`/`DOCUMENTO`) emit as Consumidor Final sin identificar: DocTipo 99, DocNro 0, receiver condition 5. Valid while the total stays under ARCA's identification threshold.
 - For Monotributo/RI scenarios, `TIPO_DOC=CUIT` is typically the most reliable path.
 
 ## Security and Privacy

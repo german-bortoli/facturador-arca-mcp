@@ -264,9 +264,9 @@ Los headers se normalizan sin distinguir mayúsculas/minúsculas ni acentos. Por
 
 | Header | Requerido | Valores / formato soportado | Comportamiento |
 |---|---|---|---|
-| `PAGADOR` | Sí | Cualquier string no vacío | Se mapea a `NOMBRE` (nombre del receptor). Alias: `NOMBRE`. |
-| `Tipo doc` | Sí | Habitualmente `DNI`, `CUIT`, `CUIL` (sin distinguir mayúsculas/minúsculas) | Se mapea a `TIPO_DOCUMENTO`. Valores desconocidos se tratan como `CONSUMIDOR FINAL` en el mapeo AFIP. |
-| `Documento` | Sí | String numérico (con o sin separadores como `.` `,` `-` espacios) | Se mapea a `NUMERO`; los separadores se eliminan antes del mapeo AFIP. Alias: `NUMERO`, `NRO_DOCUMENTO`. |
+| `PAGADOR` | No | Cualquier string | Se mapea a `NOMBRE` (nombre del receptor). Alias: `NOMBRE`. Requerido solo cuando `TIPO_DOC` es `CUIT`/`CUIL`/`DNI`. Vacío o ausente: consumidor final sin identificar. |
+| `Tipo doc` | No | Habitualmente `DNI`, `CUIT`, `CUIL` (sin distinguir mayúsculas/minúsculas) | Se mapea a `TIPO_DOCUMENTO`. Valores desconocidos, vacío o ausente se tratan como `CONSUMIDOR FINAL` en el mapeo AFIP. |
+| `Documento` | No | String numérico (con o sin separadores como `.` `,` `-` espacios) | Se mapea a `NUMERO`; los separadores se eliminan antes del mapeo AFIP. Alias: `NUMERO`, `NRO_DOCUMENTO`. Requerido solo cuando `TIPO_DOC` es `CUIT`/`CUIL`/`DNI`. Vacío o ausente: se emite con DocTipo 99, DocNro 0 (consumidor final sin identificar). |
 | `TOTAL` | Sí | Número positivo (ej. `150`, `150.50`, `150,50`, `$150`) | Importe **final** en Factura B/C; **neto sin IVA** en Factura A (salvo `IVA_EXENTO=true`). Debe ser > 0. |
 | `CONCEPTO` | No | Cualquier string | Si está presente, se usa como descripción de la factura. |
 | `COMPROBANTE` | No | `A`, `B`, `C`, `Factura A`, `Factura B`, `Factura C` | Se mapea a `FACTURA_TIPO`. Si falta o no se reconoce: se emite Factura C (con warning cuando el valor no se reconoce). NC/ND/Recibo: fila rechazada con error. Tiene precedencia sobre una columna `FACTURA_TIPO`. |
@@ -277,7 +277,7 @@ Los headers se normalizan sin distinguir mayúsculas/minúsculas ni acentos. Por
 | `IVA_GRAVADO` | No | Número (porcentaje) | **Solo Factura A/B** (ignorado en C). Default: `100`, salvo que `IVA_EXENTO` > 0: entonces `100 - IVA_EXENTO`. |
 | `IVA_EXENTO` | No | `true`/`false`, `si`/`sí`/`no`, o número (porcentaje) | **Solo Factura A/B** (ignorado en C). Default: `0`. `true`/`si` = 100% exento. Valores no reconocidos se ignoran con warning. Alias: `IVA_EXCEMPT` (typo legacy). ⚠️ Cambio vs versiones anteriores: `sí` (con tilde), porcentajes con `%` y decimales con coma antes se ignoraban en silencio (se facturaba con IVA completo); ahora se interpretan como exención **con warning**. Corré `dry_run_csv` antes de re-emitir CSVs históricos. |
 | `ALICUOTA_IVA` | No | Número (ej. `21`, `10.5`, `27`) | **Solo Factura A/B** (ignorado en C). Default: `21`, salvo `IVA_EXENTO=100`: entonces `0`. |
-| `CONDICION_IVA_RECEPTOR` | No | Código válido (`1`, `4`, `5`, `6`, `7`, `8`, `9`, `10`, `13`, `15`, `16`) o etiqueta de texto | Condición IVA del receptor. Default `6` cuando falta; valores no reconocidos (incluidos `2`, `3`, `11`, `12`, `14`) caen a `6` **con warning**. Etiquetas de texto (ej. `Consumidor Final`) se interpretan **con warning informativo**. |
+| `CONDICION_IVA_RECEPTOR` | No | Código válido (`1`, `4`, `5`, `6`, `7`, `8`, `9`, `10`, `13`, `15`, `16`) o etiqueta de texto | Condición IVA del receptor. Default `6` cuando falta (o `5` si el receptor está sin identificar); valores no reconocidos (incluidos `2`, `3`, `11`, `12`, `14`) caen al default **con warning**. Etiquetas de texto (ej. `Consumidor Final`) se interpretan **con warning informativo**. |
 | `PERIODO_DESDE` / `FECHA_SERVICIO_DESDE` | No | `dd/MM/yyyy` o `yyyy-MM-dd` | Inicio del período de servicio. Si falta: primer día del mes de emisión. |
 | `PERIODO_HASTA` / `FECHA_SERVICIO_HASTA` | No | `dd/MM/yyyy` o `yyyy-MM-dd` | Fin del período de servicio. Si falta: último día del mes de emisión. Si el período queda invertido, el emisor usa el mes de emisión con warning. |
 | `FECHA_VTO_PAGO` | No | `dd/MM/yyyy` o `yyyy-MM-dd` | Vencimiento de pago. Si falta: último día del mes de emisión. Si es anterior a la emisión (AFIP lo rechaza), se usa el último día del mes de emisión con warning. |
@@ -295,9 +295,8 @@ Aliases aceptados para el header de método de pago:
 Headers requeridos por el parser (mínimos para validación estructural):
 
 - `TOTAL`
-- `PAGADOR`
-- `TIPO_DOC` (por ejemplo `Tipo doc`)
-- `DOCUMENTO`
+
+`PAGADOR`, `TIPO_DOC` y `DOCUMENTO` son opcionales: si faltan (o quedan vacíos en una fila), esa fila se emite como factura a consumidor final sin identificar (DocTipo 99, DocNro 0, condición IVA 5), con un warning informativo en `dry_run_csv`. ARCA lo acepta mientras el total no supere el tope vigente que exige identificar al receptor.
 
 Aliases aceptados para el header de condición IVA del receptor:
 
@@ -325,6 +324,7 @@ Códigos soportados de `CONDICION_IVA_RECEPTOR`:
 Notas:
 
 - En la automatización UI actual, los flujos con `DNI` fuerzan condición IVA `5` (Consumidor final).
+- Los receptores sin identificar (sin `TIPO_DOC` ni `DOCUMENTO`) también fuerzan condición IVA `5`: el default pasa a ser `5` y un valor explícito distinto se ignora con warning.
 - Para `CUIT`/`CUIL`, `CONDICION_IVA_RECEPTOR` se respeta (o hace fallback a `6` si falta o es inválido, con warning).
 - Si la condición pedida **explícitamente** en el CSV no existe en el selector del portal, la fila falla con error claro (antes se seleccionaba la primera opción en silencio). Si la condición era el default implícito, se usa la primera opción del portal y se reporta warning.
 

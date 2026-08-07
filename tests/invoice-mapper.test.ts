@@ -140,6 +140,52 @@ describe('mapInvoiceData — receiver IVA condition', () => {
   });
 });
 
+describe('mapInvoiceData — consumidor final sin identificar', () => {
+  test('maps a row without any receiver data to DocTipo 99 / DocNro 0 / condition 5', () => {
+    const {
+      invoiceData,
+      documentTypeLabel,
+      isConsumidorFinal,
+      customerName,
+      customerDocumentNumber,
+    } = mapInvoiceData(buildRow({ NOMBRE: '', TIPO_DOCUMENTO: '', NUMERO: '' }));
+
+    expect(invoiceData.CbteTipo).toBe(11);
+    expect(invoiceData.DocTipo).toBe(99);
+    expect(invoiceData.DocNro).toBe(0);
+    expect(invoiceData.CondicionIVAReceptorId).toBe(5); // Consumidor Final
+    expect(documentTypeLabel).toBe('CONSUMIDOR FINAL');
+    expect(isConsumidorFinal).toBe(true);
+    expect(customerName).toBe('');
+    expect(customerDocumentNumber).toBe('');
+  });
+
+  test('TIPO_DOCUMENTO "CONSUMIDOR FINAL" without number also defaults to condition 5', () => {
+    const { invoiceData } = mapInvoiceData(
+      buildRow({ NOMBRE: '', TIPO_DOCUMENTO: 'CONSUMIDOR FINAL', NUMERO: '' }),
+    );
+    expect(invoiceData.DocTipo).toBe(99);
+    expect(invoiceData.DocNro).toBe(0);
+    expect(invoiceData.CondicionIVAReceptorId).toBe(5);
+  });
+
+  test('an explicit IVA_RECEIVER still wins in the mapper (issuer and dry-run force 5 later)', () => {
+    const { invoiceData } = mapInvoiceData(
+      buildRow({ NOMBRE: '', TIPO_DOCUMENTO: '', NUMERO: '', IVA_RECEIVER: '1' }),
+    );
+    expect(invoiceData.CondicionIVAReceptorId).toBe(1);
+  });
+
+  test('default stays 6 when a document number is present without TIPO_DOCUMENTO (legacy flow)', () => {
+    const { invoiceData } = mapInvoiceData(
+      buildRow({ TIPO_DOCUMENTO: '', NUMERO: '20999888776' }),
+    );
+    expect(invoiceData.DocTipo).toBe(99);
+    expect(invoiceData.DocNro).toBe(20999888776);
+    expect(invoiceData.CondicionIVAReceptorId).toBe(6);
+  });
+});
+
 describe('parseInvoiceType — unsupported comprobantes', () => {
   test('rejects credit/debit notes and receipts with a clear message', () => {
     expect(() => parseInvoiceType('Nota de credito')).toThrow(/Unsupported invoice type/);

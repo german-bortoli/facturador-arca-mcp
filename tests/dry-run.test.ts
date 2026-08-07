@@ -87,6 +87,57 @@ describe('dryRunCsv — mapper preview', () => {
     ).toBe(true);
   });
 
+  test('minimal CSV without receiver columns previews Consumidor Final sin identificar', () => {
+    const csv = [
+      'FECHA,CONCEPTO,TOTAL',
+      '08/07/2026,Venta mostrador,25000',
+    ].join('\n');
+
+    const result = dryRunCsv({ invoiceCsvText: csv });
+    expect(result.validCount).toBe(1);
+    expect(result.invalidCount).toBe(0);
+
+    const fileWarnings = result.warnings.filter((w) => w.rowNumber === null);
+    expect(
+      fileWarnings.some((w) => w.message.includes('PAGADOR, TIPO_DOC, DOCUMENTO')),
+    ).toBe(true);
+    const rowWarnings = result.warnings.filter((w) => w.rowNumber === 2);
+    expect(
+      rowWarnings.some((w) => w.message.includes('Receptor sin identificar')),
+    ).toBe(true);
+
+    const preview = result.mapperPreview[0]!;
+    expect(preview.documentType).toBe('CONSUMIDOR FINAL');
+    expect(preview.documentNumber).toBe('');
+    expect(preview.condicionIvaReceptor).toEqual({
+      id: 5,
+      label: 'Consumidor final',
+      explicit: false,
+    });
+    expect(preview.amounts!.ImpTotal).toBe(25000);
+    expect(preview.mapperError).toBeUndefined();
+  });
+
+  test('unidentified receiver with explicit non-5 condition previews the forced 5 with a warning', () => {
+    const csv = [
+      'FECHA,CONCEPTO,TOTAL,PAGADOR,TIPO_DOC,DOCUMENTO,CONDICION_IVA_RECEPTOR',
+      '08/07/2026,Venta mostrador,1000,,,,6',
+    ].join('\n');
+
+    const result = dryRunCsv({ invoiceCsvText: csv });
+    const preview = result.mapperPreview[0]!;
+    expect(preview.condicionIvaReceptor).toEqual({
+      id: 5,
+      label: 'Consumidor final',
+      explicit: true,
+    });
+    expect(
+      preview.warnings?.some((w) =>
+        w.includes('Receptor sin identificar fuerza condición IVA receptor 5'),
+      ),
+    ).toBe(true);
+  });
+
   test('marks explicitly requested receiver conditions', () => {
     const csv = [
       'FECHA,COMPROBANTE,CONCEPTO,TOTAL,PAGADOR,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR',
