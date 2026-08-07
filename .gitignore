@@ -13,3 +13,8 @@ invoices/**
 traces
 client_store.db
 client_store.db-*
+
+# run-summary artifacts (saveSummary default path bug writes to repo root)
+/.csv
+/.meta.json
+summaries/
