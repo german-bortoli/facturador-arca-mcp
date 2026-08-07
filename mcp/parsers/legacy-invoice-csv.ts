@@ -2,6 +2,7 @@ import { parse } from 'csv-parse/sync';
 import { DateTime } from 'luxon';
 import { ColumnsSchema, parseIvaExentoValue, type Columns } from '../../types/file';
 import {
+  cleanDocumentNumber,
   resolveIvaReceiverCode,
   VALID_IVA_RECEIVER_CODES,
 } from '../../utils/data-cleaner';
@@ -93,6 +94,12 @@ export interface LegacyInvoiceParseResult {
   invalid: LegacyInvoiceParseError[];
   /** Non-fatal notes: values that will be defaulted, corrected or ignored. */
   warnings: LegacyInvoiceParseWarning[];
+  /**
+   * False when the CSV has neither TIPO_DOC nor DOCUMENTO headers: every row
+   * can only be emitted as Consumidor Final sin identificar. Emission gates
+   * on this to require an explicit opt-in.
+   */
+  hasReceiverIdentificationHeaders: boolean;
 }
 
 function normalizeHeader(value: string): string {
@@ -169,21 +176,25 @@ function assertRequiredHeaders(rows: Record<string, unknown>[]): void {
 /**
  * File-level heads-up when the CSV has no receiver-identification columns at
  * all: every row will be issued as Consumidor Final sin identificar.
+ * A file that has TIPO_DOC or DOCUMENTO can still identify receivers, so the
+ * fallback message would mislead there (PAGADOR alone missing never causes
+ * the Consumidor Final fallback: identified rows fail on NOMBRE instead).
  */
 function collectMissingReceiverHeaderWarnings(
   rows: Record<string, unknown>[],
   warnings: LegacyInvoiceParseWarning[],
 ): void {
   const headers = new Set(rows.flatMap((row) => Object.keys(row)));
-  const missing = RECEIVER_ID_HEADERS.filter((header) => !headers.has(header));
-  if (missing.length > 0) {
-    warnings.push({
-      rowNumber: null,
-      message:
-        `El CSV no tiene columnas ${missing.join(', ')}: las filas sin identificación del receptor ` +
-        'se emiten como Consumidor Final sin identificar (DocTipo 99, DocNro 0, condición IVA 5).',
-    });
+  if (headers.has('TIPO_DOC') || headers.has('DOCUMENTO')) {
+    return;
   }
+  const missing = RECEIVER_ID_HEADERS.filter((header) => !headers.has(header));
+  warnings.push({
+    rowNumber: null,
+    message:
+      `El CSV no tiene columnas ${missing.join(', ')}: las filas sin identificación del receptor ` +
+      'se emiten como Consumidor Final sin identificar (DocTipo 99, DocNro 0, condición IVA 5).',
+  });
 }
 
 function parseLegacyInvoiceType(rawComprobante: unknown): 'A' | 'B' | 'C' | undefined {
@@ -304,11 +315,20 @@ function collectRowWarnings(
   const rawValue = (key: string) => String(mappedRow[key] ?? '').trim();
 
   const tipoDoc = rawValue('TIPO_DOC').toUpperCase();
-  const documento = rawValue('DOCUMENTO');
-  if (!documento && !IDENTIFIED_DOC_TYPES.has(tipoDoc)) {
+  // Cleaned like the schema's NUMERO transform, so placeholder cells made of
+  // separators ('-', '.') are treated as empty here too.
+  const documento = cleanDocumentNumber(rawValue('DOCUMENTO'));
+  const isUnidentifiedRow = !documento && !IDENTIFIED_DOC_TYPES.has(tipoDoc);
+  if (isUnidentifiedRow) {
     push(
       'Receptor sin identificar: se emite como Consumidor Final (DocTipo 99, DocNro 0, condición IVA 5). ' +
       'ARCA lo acepta mientras el total no supere el tope vigente que exige identificar al receptor.',
+    );
+  } else if (documento && !IDENTIFIED_DOC_TYPES.has(tipoDoc)) {
+    // Non-empty here implies tipoDoc is set (empty + documento is a row error).
+    push(
+      `TIPO_DOC "${rawValue('TIPO_DOC')}" no es CUIT/CUIL/DNI: el portal intentará seleccionar esa opción ` +
+      'por etiqueta y, si no existe para este comprobante, la fila falla con error.',
     );
   }
 
@@ -359,15 +379,21 @@ function collectRowWarnings(
 
   const rawIvaReceiver = rawValue('IVA_RECEIVER');
   if (rawIvaReceiver) {
-    const resolution = resolveIvaReceiverCode(rawIvaReceiver, 6);
+    // The effective default must match the mapper: 5 for unidentified rows,
+    // 6 for identified ones.
+    const defaultIvaCode = isUnidentifiedRow ? 5 : 6;
+    const defaultIvaLabel = isUnidentifiedRow
+      ? '5 (Consumidor Final)'
+      : '6 (Responsable Monotributo)';
+    const resolution = resolveIvaReceiverCode(rawIvaReceiver, defaultIvaCode);
     if (resolution.source === 'label') {
       push(
         `CONDICION_IVA_RECEPTOR "${rawIvaReceiver}" interpretada como código ${resolution.code}. ` +
-        'Verificá que sea la condición correcta del receptor (si querés el default, dejá la columna vacía o usá 6).',
+        `Verificá que sea la condición correcta del receptor (si querés el default, dejá la columna vacía o usá ${defaultIvaCode}).`,
       );
     } else if (resolution.source === 'unrecognized') {
       push(
-        `CONDICION_IVA_RECEPTOR "${rawIvaReceiver}" no reconocida (códigos válidos: ${VALID_IVA_RECEIVER_CODES.join(', ')} o etiquetas como "Consumidor Final"): se usará 6 (Responsable Monotributo).`,
+        `CONDICION_IVA_RECEPTOR "${rawIvaReceiver}" no reconocida (códigos válidos: ${VALID_IVA_RECEIVER_CODES.join(', ')} o etiquetas como "Consumidor Final"): se usará ${defaultIvaLabel}.`,
       );
     }
   }
@@ -428,6 +454,10 @@ export function parseLegacyInvoiceCsvText(csvText: string): LegacyInvoiceParseRe
   const mappedRows = rawRows.map(mapLegacyRowKeys);
   assertRequiredHeaders(mappedRows);
 
+  const presentHeaders = new Set(mappedRows.flatMap((row) => Object.keys(row)));
+  const hasReceiverIdentificationHeaders =
+    presentHeaders.has('TIPO_DOC') || presentHeaders.has('DOCUMENTO');
+
   const valid: Columns[] = [];
   const validRowNumbers: number[] = [];
   const invalid: LegacyInvoiceParseError[] = [];
@@ -455,6 +485,22 @@ export function parseLegacyInvoiceCsvText(csvText: string): LegacyInvoiceParseRe
         error:
           `Tipo de comprobante no soportado: "${rawComprobante}" (${unsupportedType}). ` +
           'Este emisor solo genera Factura A, B o C; notas de crédito/débito y recibos deben emitirse manualmente en el portal AFIP.',
+        row: mappedRow,
+      });
+      return;
+    }
+
+    // A number without a document type is ambiguous (CUIT? DNI?): emitting it
+    // would either mis-identify the receiver or submit an inconsistent form.
+    const rowTipoDoc = String(mappedRow.TIPO_DOC ?? '').trim();
+    const rowDocumento = cleanDocumentNumber(String(mappedRow.DOCUMENTO ?? '').trim());
+    if (rowDocumento && !rowTipoDoc) {
+      invalid.push({
+        rowNumber,
+        error:
+          `La fila tiene DOCUMENTO "${rowDocumento}" pero TIPO_DOC vacío. ` +
+          'Indicá el tipo de documento del receptor (CUIT, CUIL o DNI), ' +
+          'o vaciá DOCUMENTO para emitir como Consumidor Final sin identificar.',
         row: mappedRow,
       });
       return;
@@ -489,5 +535,5 @@ export function parseLegacyInvoiceCsvText(csvText: string): LegacyInvoiceParseRe
     });
   });
 
-  return { valid, validRowNumbers, invalid, warnings };
+  return { valid, validRowNumbers, invalid, warnings, hasReceiverIdentificationHeaders };
 }

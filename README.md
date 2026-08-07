@@ -298,6 +298,12 @@ Headers requeridos por el parser (mínimos para validación estructural):
 
 `PAGADOR`, `TIPO_DOC` y `DOCUMENTO` son opcionales: si faltan (o quedan vacíos en una fila), esa fila se emite como factura a consumidor final sin identificar (DocTipo 99, DocNro 0, condición IVA 5), con un warning informativo en `dry_run_csv`. ARCA lo acepta mientras el total no supere el tope vigente que exige identificar al receptor.
 
+Resguardos:
+
+- Si el CSV no tiene ninguna columna `TIPO_DOC`/`DOCUMENTO`, `emit_invoice` no emite salvo que se pase `allowUnidentifiedReceivers: true` (evita emitir facturas anónimas por error con un archivo equivocado).
+- Una fila con `DOCUMENTO` pero `TIPO_DOC` vacío es un error de fila (ambiguo: ¿CUIT o DNI?): indicá el tipo o vaciá el número.
+- Factura A siempre exige receptor identificado; una fila sin identificar con `COMPROBANTE=Factura A` falla (dry-run lo advierte).
+
 Aliases aceptados para el header de condición IVA del receptor:
 
 - `CONDICION_IVA_RECEPTOR` (recomendado)

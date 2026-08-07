@@ -16,6 +16,12 @@ export interface EmitInvoiceInput {
   headless?: boolean | string;
   slowMoMs?: number;
   retry?: boolean;
+  /**
+   * Required (true) to emit a CSV that has NO receiver identification columns
+   * (TIPO_DOC/DOCUMENTO): every row is issued as Consumidor Final sin
+   * identificar. Confirm with the user before setting it.
+   */
+  allowUnidentifiedReceivers?: boolean;
   pointOfSale?: string;
   saveSummaryPath?: string;
   summaryFormat?: 'csv' | 'xlsx';

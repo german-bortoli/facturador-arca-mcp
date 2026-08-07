@@ -36,44 +36,58 @@ function normalizeOptionText(value: string): string {
 
 /**
  * Resolves which option of the portal's receiver document-type select matches
- * the requested AFIP document type. Matches by option value first, then by the
- * CSV label (only when non-empty: an empty label must NOT match every option).
- * For CONSUMIDOR_FINAL (99) it falls back to the portal's "unidentified"
- * labels, which vary across taxpayer profiles. Returns undefined when nothing
- * matches (the caller decides whether that is fatal).
+ * the requested AFIP document type. Returns undefined when nothing matches
+ * (the caller decides whether that is fatal).
+ *
+ * CONSUMIDOR_FINAL (99) covers two different rows, split by hasDocumentNumber:
+ * - No number (truly unidentified): resolve to the portal's "unidentified"
+ *   option (value 99 or a "Sin identificar"/"Otro" label), IGNORING the CSV
+ *   label: a stray TIPO_DOC like PASAPORTE with no number must not select an
+ *   option that then demands a number.
+ * - With a number (a real non-CUIT/CUIL/DNI type, e.g. PASAPORTE or CDI):
+ *   match by label ONLY. Selecting the portal's "Sin identificar" option while
+ *   a number gets filled would submit a contradictory receiver.
  */
 export function matchReceiverDocumentTypeOption(
   options: SelectOptionItem[],
   documentType: number,
   documentLabelRaw: string,
+  hasDocumentNumber: boolean,
 ): SelectOptionItem | undefined {
-  const requestedValue = String(documentType);
-  const byValue = options.find((option) => option.value === requestedValue);
+  const normalizedLabel = normalizeOptionText(documentLabelRaw);
+
+  if (documentType === DOCUMENT_TYPES.CONSUMIDOR_FINAL) {
+    if (hasDocumentNumber) {
+      if (!normalizedLabel) {
+        return undefined;
+      }
+      return options.find((option) =>
+        normalizeOptionText(option.text).includes(normalizedLabel),
+      );
+    }
+    return (
+      options.find((option) => option.value === '99') ??
+      options.find((option) => {
+        const text = normalizeOptionText(option.text);
+        return (
+          text.includes('SIN IDENTIFICAR') ||
+          text.includes('CONSUMIDOR FINAL') ||
+          text.includes('OTRO')
+        );
+      })
+    );
+  }
+
+  const byValue = options.find((option) => option.value === String(documentType));
   if (byValue) {
     return byValue;
   }
-
-  const normalizedLabel = normalizeOptionText(documentLabelRaw);
+  // An empty label must NOT match every option.
   if (normalizedLabel) {
-    const byLabel = options.find((option) =>
+    return options.find((option) =>
       normalizeOptionText(option.text).includes(normalizedLabel),
     );
-    if (byLabel) {
-      return byLabel;
-    }
   }
-
-  if (documentType === DOCUMENT_TYPES.CONSUMIDOR_FINAL) {
-    return options.find((option) => {
-      const text = normalizeOptionText(option.text);
-      return (
-        text.includes('SIN IDENTIFICAR') ||
-        text.includes('CONSUMIDOR FINAL') ||
-        text.includes('OTRO')
-      );
-    });
-  }
-
   return undefined;
 }
 
@@ -589,6 +603,19 @@ export class InvoiceIssuer {
     // DocTipo 99 (Consumidor Final sin identificar) is a valid receiver: the
     // portal accepts it without document number, name or address.
     const documentType = invoiceData.DocTipo;
+    const hasDocumentNumber = inv.NUMERO.trim().length > 0;
+    // A number without a document type is ambiguous (CUIT? DNI?): the legacy
+    // CSV parser rejects it at parse; this guard covers the XLSX/CLI path.
+    if (
+      documentType === DOCUMENT_TYPES.CONSUMIDOR_FINAL &&
+      hasDocumentNumber &&
+      !inv.TIPO_DOCUMENTO.trim()
+    ) {
+      throw new Error(
+        `La fila tiene DOCUMENTO ${inv.NUMERO} pero TIPO_DOC vacío: indicá CUIT, CUIL o DNI, ` +
+        'o vaciá DOCUMENTO para emitir como Consumidor Final sin identificar.',
+      );
+    }
 
     const ivaReceiverSelect = this.page.locator('select[name="idIVAReceptor"]');
     try {
@@ -618,8 +645,7 @@ export class InvoiceIssuer {
     // DNI. A receiver without any identification (no TIPO_DOC/DOCUMENTO) can
     // only be invoiced as Consumidor Final, so it forces condition 5 too.
     const isUnidentifiedReceiver =
-      documentType === DOCUMENT_TYPES.CONSUMIDOR_FINAL &&
-      inv.NUMERO.trim().length === 0;
+      documentType === DOCUMENT_TYPES.CONSUMIDOR_FINAL && !hasDocumentNumber;
     const forcesConsumidorFinal =
       documentType === DOCUMENT_TYPES.DNI || isUnidentifiedReceiver;
     const requestedIva = forcesConsumidorFinal
@@ -643,15 +669,22 @@ export class InvoiceIssuer {
     if (matchedIva) {
       await ivaReceiverSelect.selectOption({ index: matchedIva.index });
     } else if (
-      ivaExplicitlyRequested &&
-      (!forcesConsumidorFinal ||
-        String(invoiceData.CondicionIVAReceptorId) === requestedIva)
+      isUnidentifiedReceiver ||
+      (ivaExplicitlyRequested &&
+        (!forcesConsumidorFinal ||
+          String(invoiceData.CondicionIVAReceptorId) === requestedIva))
     ) {
-      // The condition was explicitly requested in the CSV: selecting a
-      // different one would issue a legally different invoice, so fail loud.
+      // An unidentified receiver can ONLY be Consumidor Final: falling back to
+      // another condition would issue a legally different invoice (and the
+      // portal cannot complete it without a document anyway). Same for a
+      // condition explicitly requested in the CSV: fail loud.
       throw new Error(
-        `Requested IVA receiver condition "${inv.IVA_RECEIVER}" (code ${requestedIva}, ${ivaConditionLabel}) ` +
-        `is not offered by AFIP for this comprobante. Available: ${ivaOptions.map((o) => `${o.value}:${o.text}`).join(', ')}`,
+        isUnidentifiedReceiver
+          ? 'El portal no ofrece la condición Consumidor Final (5) para este comprobante y el receptor no está identificado. ' +
+            `Disponibles: ${ivaOptions.map((o) => `${o.value}:${o.text}`).join(', ')}. ` +
+            'Agregá TIPO_DOC y DOCUMENTO del receptor, o usá un comprobante que admita Consumidor Final (B/C).'
+          : `Requested IVA receiver condition "${inv.IVA_RECEIVER}" (code ${requestedIva}, ${ivaConditionLabel}) ` +
+            `is not offered by AFIP for this comprobante. Available: ${ivaOptions.map((o) => `${o.value}:${o.text}`).join(', ')}`,
       );
     } else {
       // Default/implicit condition not offered (e.g. Factura A only offers
@@ -678,7 +711,12 @@ export class InvoiceIssuer {
     }
 
     if (docTypeSelectVisible) {
-      await this.selectReceiverDocumentType(documentType, inv.TIPO_DOCUMENTO, warn);
+      await this.selectReceiverDocumentType(
+        documentType,
+        inv.TIPO_DOCUMENTO,
+        hasDocumentNumber,
+        warn,
+      );
     }
 
     const receiverDocInput = this.page.locator('input[name="nroDocReceptor"]').first();
@@ -695,14 +733,19 @@ export class InvoiceIssuer {
         // The receiver section renders as a unit: if the number input is
         // visible now, a doc-type select that appeared late is visible too.
         if (await docTypeSelect.isVisible()) {
-          await this.selectReceiverDocumentType(documentType, inv.TIPO_DOCUMENTO, warn);
+          await this.selectReceiverDocumentType(
+            documentType,
+            inv.TIPO_DOCUMENTO,
+            hasDocumentNumber,
+            warn,
+          );
         } else {
           warn(
             'El selector de tipo de documento del receptor no apareció en el formulario; se continúa sin seleccionarlo.',
           );
         }
       }
-      if (inv.NUMERO.trim().length > 0) {
+      if (hasDocumentNumber) {
         await receiverDocInput.fill(inv.NUMERO);
         await this.triggerReceiverDocumentBlur(receiverDocInput);
         receiverDocFilled = true;
@@ -1127,16 +1170,22 @@ export class InvoiceIssuer {
   private async selectReceiverDocumentType(
     documentType: number,
     documentLabelRaw: string,
+    hasDocumentNumber: boolean,
     warn: (message: string) => void,
   ): Promise<void> {
     const documentTypeSelect = this.page.locator('select[name="idTipoDocReceptor"]').first();
     await documentTypeSelect.waitFor({ state: 'visible' });
     const options = await this.waitForSelectableOptions(documentTypeSelect, 30_000);
 
-    const matched = matchReceiverDocumentTypeOption(options, documentType, documentLabelRaw);
+    const matched = matchReceiverDocumentTypeOption(
+      options,
+      documentType,
+      documentLabelRaw,
+      hasDocumentNumber,
+    );
 
     if (!matched) {
-      if (documentType === DOCUMENT_TYPES.CONSUMIDOR_FINAL) {
+      if (documentType === DOCUMENT_TYPES.CONSUMIDOR_FINAL && !hasDocumentNumber) {
         // Unidentified receiver: the portal keeps its default option and the
         // number is left empty, which AFIP accepts for Consumidor Final.
         warn(
@@ -1144,6 +1193,8 @@ export class InvoiceIssuer {
         );
         return;
       }
+      // A row WITH a number must never submit with the placeholder selected
+      // (or the "Sin identificar" option) while the number gets filled.
       throw new Error(
         `Receiver document type "${documentLabelRaw}" (${documentType}) not available. Options: ${options.map((option) => `${option.value}:${option.text}`).join(', ')}`,
       );

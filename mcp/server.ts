@@ -127,6 +127,14 @@ const tools: Tool[] = [
           type: 'boolean',
           description: 'Retry failed invoices once at end of run.',
         },
+        allowUnidentifiedReceivers: {
+          type: 'boolean',
+          description:
+            'Required (true) to emit a CSV that has NO receiver identification columns (TIPO_DOC/DOCUMENTO): ' +
+            'every row is issued as Consumidor Final sin identificar (DocTipo 99, DocNro 0, condition 5). ' +
+            'Without it the call returns early with a message instead of emitting. Confirm with the user first. ' +
+            'Not needed when the columns exist, even if some rows leave them empty.',
+        },
         pointOfSale: {
           type: 'string',
           description:
@@ -486,6 +494,8 @@ Exceptions: \`TIPO_DOC=DNI\` and unidentified receivers always emit with conditi
 
 A monotributista can invoice a final consumer without any client data: leave \`PAGADOR\`, \`TIPO_DOC\` and \`DOCUMENTO\` empty (or omit the columns). The invoice is emitted with DocTipo 99, DocNro 0 and receiver condition 5. \`DIRECCION\` is also optional in this case. ARCA accepts this while the total stays under the current identification threshold; above it the portal rejects the row and the receiver must be identified.
 
+Safety gate: when the CSV has NO \`TIPO_DOC\`/\`DOCUMENTO\` columns at all, \`emit_invoice\` returns early without emitting unless you pass \`allowUnidentifiedReceivers: true\`. Run \`dry_run_csv\`, confirm with the user, then retry with the flag. A \`DOCUMENTO\` with an empty \`TIPO_DOC\` is a row error (specify CUIT/CUIL/DNI or clear the number).
+
 Text labels are interpreted to their numeric code and produce one expected informational warning per row in \`dry_run_csv\` — this is normal, not an error; use the numeric code to avoid it.
 
 ## Monotributo (Factura C)
@@ -605,7 +615,7 @@ Read the \`SKILL.md\` resource for the complete field mapping table, IVA conditi
 
 Notes:
 - \`CONDICION_IVA_RECEPTOR\` accepts valid AFIP receiver codes (1, 4, 5, 6, 7, 8, 9, 10, 13, 15, 16) or text labels (e.g. \`IVA Responsable Inscripto\`). Empty = 6 (Responsable Monotributo) for identified receivers, 5 (Consumidor Final) for unidentified ones. Text labels produce an expected informational warning in \`dry_run_csv\` (not a problem — confirm the interpreted code and continue). \`TIPO_DOC=DNI\` and unidentified receivers always emit with condition 5.
-- Consumidor Final sin identificar: PAGADOR/TIPO_DOC/DOCUMENTO empty (or absent) is valid and emits DocTipo 99, DocNro 0, condition 5. The related dry-run warnings are informational, not errors.
+- Consumidor Final sin identificar: PAGADOR/TIPO_DOC/DOCUMENTO empty (or absent) is valid and emits DocTipo 99, DocNro 0, condition 5. The related dry-run warnings are informational, not errors. If the CSV has NO TIPO_DOC/DOCUMENTO columns at all, \`emit_invoice\` requires \`allowUnidentifiedReceivers: true\` (confirm with the user first). DOCUMENTO with an empty TIPO_DOC is a row error.
 - Factura C (monotributo) ignores \`IVA_EXENTO\`/\`ALICUOTA_IVA\`/\`IVA_GRAVADO\`: TOTAL is always the final amount.
 - For Factura A (RI to RI): set \`IVA_EXENTO=true\` in the CSV for exempt invoices. Use \`PERIODO_DESDE\`/\`PERIODO_HASTA\` for explicit service periods.
 - Without \`IVA_EXENTO=true\`, Factura A defaults to 21% IVA added on top of TOTAL (TOTAL is the NET amount).

@@ -121,6 +121,11 @@ async function main() {
     const parsed = parseLegacyInvoiceCsvText(csvText);
     valid = parsed.valid;
     invalid = parsed.invalid;
+    for (const warning of parsed.warnings) {
+      console.warn(
+        `⚠️ ${warning.rowNumber != null ? `Fila ${warning.rowNumber}: ` : ''}${warning.message}`,
+      );
+    }
   } else {
     const parsed = await fileParser.parse(filePath, {
       schema: ColumnsSchema, xlsx: {
@@ -129,6 +134,19 @@ async function main() {
     });
     valid = parsed.valid;
     invalid = parsed.invalid;
+  }
+
+  // The XLSX branch has no parse warnings, so derive the unidentified count
+  // from the post-schema rows in both branches: the operator must confirm
+  // anonymous emissions knowingly.
+  const unidentified = valid.filter(
+    (row) => !row.NUMERO && !['CUIT', 'CUIL', 'DNI'].includes(row.TIPO_DOCUMENTO),
+  );
+  if (unidentified.length > 0) {
+    console.warn(
+      `⚠️ ${unidentified.length} fila(s) sin identificación del receptor: se emiten como ` +
+      'Consumidor Final sin identificar (DocTipo 99, DocNro 0, condición IVA 5).',
+    );
   }
 
   const msg = valid.length > 0 ? `Found ${valid.length} valid invoices\nFound ${invalid.length} invalid invoices:\n${invalid.map(i => JSON.stringify(i)).join('\n')}\nContinue? (y/n)\n` : 'No valid invoices found';

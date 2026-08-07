@@ -138,6 +138,20 @@ describe('dryRunCsv — mapper preview', () => {
     ).toBe(true);
   });
 
+  test('unidentified receiver with Factura A warns that the emission will fail', () => {
+    const csv = [
+      'FECHA,COMPROBANTE,CONCEPTO,TOTAL',
+      '08/07/2026,Factura A,Honorarios,100000',
+    ].join('\n');
+
+    const result = dryRunCsv({ invoiceCsvText: csv });
+    const preview = result.mapperPreview[0]!;
+    expect(preview.cbteTipo).toBe(1);
+    expect(
+      preview.warnings?.some((w) => w.includes('Factura A exige receptor identificado')),
+    ).toBe(true);
+  });
+
   test('marks explicitly requested receiver conditions', () => {
     const csv = [
       'FECHA,COMPROBANTE,CONCEPTO,TOTAL,PAGADOR,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR',

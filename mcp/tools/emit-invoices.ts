@@ -47,6 +47,27 @@ export async function emitInvoice(input: EmitInvoiceInput) {
   }
 
   const parsed = parseLegacyInvoiceCsvText(input.invoiceCsvText);
+
+  // A CSV with no receiver-identification columns emits EVERY row as an
+  // anonymous Consumidor Final. That is a supported flow, but it must be an
+  // explicit choice, not the accidental result of feeding the wrong file.
+  if (!parsed.hasReceiverIdentificationHeaders && !input.allowUnidentifiedReceivers) {
+    return {
+      invoicingDate: getInvoicingDate(Boolean(input.now)),
+      validCount: parsed.valid.length,
+      invalidCount: parsed.invalid.length,
+      invalidRows: parsed.invalid,
+      parseWarnings: parsed.warnings,
+      successCount: 0,
+      failedCount: 0,
+      message:
+        'El CSV no tiene columnas de identificación del receptor (TIPO_DOC/DOCUMENTO): ' +
+        `las ${parsed.valid.length} filas válidas se emitirían como Consumidor Final sin identificar. ` +
+        'No se emitió nada. Revisá el preview con dry_run_csv, confirmá con el usuario y ' +
+        'reintentá con allowUnidentifiedReceivers: true.',
+    };
+  }
+
   if (parsed.valid.length === 0) {
     return {
       invoicingDate: getInvoicingDate(Boolean(input.now)),

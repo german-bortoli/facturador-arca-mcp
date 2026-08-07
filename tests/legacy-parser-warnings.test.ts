@@ -290,3 +290,85 @@ describe('legacy parser — consumidor final sin identificar', () => {
     ).toHaveLength(0);
   });
 });
+
+describe('legacy parser — receiver identification edge cases (review fixes)', () => {
+  test('placeholder DOCUMENTO made of separators still counts as unidentified', () => {
+    const csv = [
+      BASE_HEADER,
+      '08/07/2026,Factura C,Venta,Contado,1000,,,-,',
+    ].join('\n');
+
+    const parsed = parseLegacyInvoiceCsvText(csv);
+    expect(parsed.invalid).toHaveLength(0);
+    expect(parsed.valid[0]!.NUMERO).toBe('');
+    expect(
+      parsed.warnings.some((w) => w.message.includes('Receptor sin identificar')),
+    ).toBe(true);
+  });
+
+  test('DOCUMENTO with empty TIPO_DOC is a row error, not a silent emission', () => {
+    const csv = [
+      BASE_HEADER,
+      '08/07/2026,Factura C,Venta,Contado,1000,Cliente Demo,,20999888776,',
+    ].join('\n');
+
+    const parsed = parseLegacyInvoiceCsvText(csv);
+    expect(parsed.valid).toHaveLength(0);
+    expect(parsed.invalid).toHaveLength(1);
+    expect(parsed.invalid[0]!.error).toContain('TIPO_DOC vacío');
+    expect(parsed.invalid[0]!.error).toContain('20999888776');
+  });
+
+  test('unrecognized TIPO_DOC with a number parses but warns about label matching', () => {
+    const csv = [
+      BASE_HEADER,
+      '08/07/2026,Factura C,Venta,Contado,1000,Cliente Demo,PASAPORTE,AA1234567,',
+    ].join('\n');
+
+    const parsed = parseLegacyInvoiceCsvText(csv);
+    expect(parsed.invalid).toHaveLength(0);
+    expect(parsed.valid).toHaveLength(1);
+    expect(
+      parsed.warnings.some((w) =>
+        w.message.includes('TIPO_DOC "PASAPORTE" no es CUIT/CUIL/DNI'),
+      ),
+    ).toBe(true);
+  });
+
+  test('file missing only PAGADOR does not get the consumidor-final fallback warning', () => {
+    const csv = [
+      'TIPO_DOC,DOCUMENTO,CONCEPTO,TOTAL',
+      'CUIT,20999888776,Servicio,1000',
+    ].join('\n');
+
+    const parsed = parseLegacyInvoiceCsvText(csv);
+    const fileLevel = parsed.warnings.filter((w) => w.rowNumber === null);
+    expect(fileLevel.some((w) => w.message.includes('Consumidor Final'))).toBe(false);
+  });
+
+  test('unrecognized CONDICION_IVA_RECEPTOR on an unidentified row reports fallback 5, not 6', () => {
+    const csv = [
+      `${BASE_HEADER},CONDICION_IVA_RECEPTOR`,
+      '08/07/2026,Factura C,Venta,Contado,1000,,,,,12',
+    ].join('\n');
+
+    const parsed = parseLegacyInvoiceCsvText(csv);
+    const message = parsed.warnings.find((w) =>
+      w.message.includes('CONDICION_IVA_RECEPTOR "12" no reconocida'),
+    )?.message;
+    expect(message).toContain('se usará 5 (Consumidor Final)');
+  });
+
+  test('unrecognized CONDICION_IVA_RECEPTOR on an identified row still reports fallback 6', () => {
+    const csv = [
+      `${BASE_HEADER},CONDICION_IVA_RECEPTOR`,
+      `${BASE_ROW},12`,
+    ].join('\n');
+
+    const parsed = parseLegacyInvoiceCsvText(csv);
+    const message = parsed.warnings.find((w) =>
+      w.message.includes('CONDICION_IVA_RECEPTOR "12" no reconocida'),
+    )?.message;
+    expect(message).toContain('se usará 6 (Responsable Monotributo)');
+  });
+});

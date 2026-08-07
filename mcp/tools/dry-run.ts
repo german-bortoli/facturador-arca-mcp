@@ -88,6 +88,15 @@ export function dryRunCsv(input: DryRunCsvInput) {
           `se ignora el valor ${mapped.invoiceData.CondicionIVAReceptorId} (${mapped.ivaConditionLabel}).`,
         );
       }
+      if (
+        isUnidentifiedReceiver &&
+        mapped.invoiceData.CbteTipo === INVOICE_TYPES.FACTURA_A
+      ) {
+        rowWarnings.push(
+          'Factura A exige receptor identificado (Responsable Inscripto): el portal no ofrece ' +
+          'Consumidor Final (5) y la fila fallará en la emisión. Agregá TIPO_DOC y DOCUMENTO.',
+        );
+      }
 
       return {
         ...previewBase,

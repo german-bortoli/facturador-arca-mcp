@@ -176,6 +176,12 @@ FECHA,COMPROBANTE,CONCEPTO,FORMA_DE_PAGO,TOTAL,PAGADOR,TIPO_DOC,DOCUMENTO,DIRECC
 ```
 No receiver data is needed: the invoice is emitted with DocTipo 99, DocNro 0 and receiver condition 5 (Consumidor Final). ARCA accepts this while the total stays under the current identification threshold; above it the portal rejects the row and the receiver must be identified.
 
+Safety notes for this flow:
+
+- If the CSV has no `TIPO_DOC`/`DOCUMENTO` columns at all, `emit_invoice` refuses to run unless you pass `allowUnidentifiedReceivers: true`. Run `dry_run_csv`, confirm with the user, then retry with the flag.
+- A `DOCUMENTO` with an empty `TIPO_DOC` is a row error (ambiguous: CUIT or DNI?). Specify the type or clear the number.
+- Factura A always requires an identified receiver; an unidentified row with `COMPROBANTE=Factura A` fails (dry-run warns about it).
+
 **Factura A — RI to RI (IVA exempt, with service period):**
 ```
 FECHA,PERIODO_DESDE,PERIODO_HASTA,CONCEPTO,TOTAL,PAGADOR,TIPO_DOC,DOCUMENTO,DIRECCION,CONDICION_IVA_RECEPTOR,FORMA_DE_PAGO,COMPROBANTE,IVA_EXENTO
