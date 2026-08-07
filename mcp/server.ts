@@ -19,6 +19,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { dryRunCsv } from './tools/dry-run';
 import { emitInvoice } from './tools/emit-invoices';
+import { getEmitJobStatus } from './emit-jobs';
 import { validateCredentialsSource } from './tools/validate-credentials';
 import { storeClient, type StoreClientToolInput } from './tools/store-client';
 import { listClients } from './tools/list-clients';
@@ -27,6 +28,7 @@ import { deleteClient, type DeleteClientToolInput } from './tools/delete-client'
 import type {
   DryRunCsvInput,
   EmitInvoiceInput,
+  EmitStatusInput,
   ValidateCredentialsSourceInput,
 } from './types';
 
@@ -136,6 +138,14 @@ const tools: Tool[] = [
             'Without it the call returns early with a message instead of emitting. Confirm with the user first. ' +
             'Not needed when the columns exist, even if some rows leave them empty.',
         },
+        background: {
+          type: 'boolean',
+          description:
+            'STRONGLY RECOMMENDED for HTTP/remote connectors: runs the browser emission as a background job and ' +
+            'returns a jobId immediately, so the call never hits the MCP client request timeout (~60s) while ' +
+            'AFIP login and emission run (often 1-5 minutes). Poll emit_status with the jobId for progress and ' +
+            'the final result (issued invoices, downloadUrls, failures). Parse and credential errors still fail fast.',
+        },
         pointOfSale: {
           type: 'string',
           description:
@@ -205,6 +215,26 @@ const tools: Tool[] = [
         },
       },
       required: ['invoiceCsvText'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'emit_status',
+    title: 'Emit job status',
+    description:
+      'Reports the status of a background emission started with emit_invoice { background: true }: ' +
+      'running (with per-invoice progress counters), completed (with the full emission result: issued invoices, ' +
+      'downloadUrls, failures, summary paths) or failed (with the error). ' +
+      'Pass the jobId returned by emit_invoice; omit it to get the latest job. ' +
+      'Jobs live in server memory: after a server restart, verify results in the ARCA portal instead.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        jobId: {
+          type: 'string',
+          description: 'Job id returned by emit_invoice with background: true. Omit for the most recent job.',
+        },
+      },
       additionalProperties: false,
     },
   },
@@ -615,8 +645,9 @@ Read the \`SKILL.md\` resource for the complete field mapping table, IVA conditi
 2. **Build CSV** — use the \`build_invoice_csv_from_input\` prompt if needed.
 3. **Dry run** — call \`dry_run_csv\`. Stop if \`invalidCount > 0\`. Review \`warnings\` (defaulted/ignored values) and \`mapperPreview\` (amounts, comprobante type, receiver IVA condition, effective dates) — surface anything unexpected to the user.
 4. **Confirm** — present invoice count, totals, receiver names, and any dry-run warnings. **Do not proceed without user confirmation.**
-5. **Emit** — call \`emit_invoice\` with \`now: true\` and \`issuerCuit\` (or \`credentials\` object). Do NOT pass \`debug\` unless the user explicitly asked for a debug/test run: \`debug: true\` silently skips the final confirmation and NO invoice is issued. ONLY for Responsable Inscripto taxpayers (Factura A/B, never Monotributo/Factura C), add \`loginUrl: "https://auth.afip.gob.ar/contribuyente_/login.xhtml?action=SYSTEM&system=rcel"\`.
-6. **Report** — show success/failed counts and any per-invoice \`warnings\`. Render \`downloadUrl\` links if present.
+5. **Emit** — call \`emit_invoice\` with \`now: true\` and \`issuerCuit\` (or \`credentials\` object). Do NOT pass \`debug\` unless the user explicitly asked for a debug/test run: \`debug: true\` silently skips the final confirmation and NO invoice is issued. ONLY for Responsable Inscripto taxpayers (Factura A/B, never Monotributo/Factura C), add \`loginUrl: "https://auth.afip.gob.ar/contribuyente_/login.xhtml?action=SYSTEM&system=rcel"\`. On HTTP/remote connectors ALWAYS add \`background: true\`: the synchronous call exceeds the MCP client timeout (~60s) while the browser logs into AFIP, and a timed-out call may still emit server-side (duplicate risk on blind retries).
+6. **Poll (background mode)** — call \`emit_status\` with the returned \`jobId\` every ~30s until \`status\` is \`completed\` or \`failed\`. NEVER re-call \`emit_invoice\` because a call timed out: check \`emit_status\` (or the ARCA portal) first.
+7. **Report** — show success/failed counts and any per-invoice \`warnings\`. Render \`downloadUrl\` links if present.
 
 Notes:
 - \`CONDICION_IVA_RECEPTOR\` accepts valid AFIP receiver codes (1, 4, 5, 6, 7, 8, 9, 10, 13, 15, 16) or text labels (e.g. \`IVA Responsable Inscripto\`). Empty = 6 (Responsable Monotributo) for identified receivers, 5 (Consumidor Final) for unidentified ones. Text labels produce an expected informational warning in \`dry_run_csv\` (not a problem — confirm the interpreted code and continue). \`TIPO_DOC=DNI\` and unidentified receivers always emit with condition 5.
@@ -648,6 +679,10 @@ function createMcpServer(): Server {
 
     if (name === 'emit_invoice') {
       const result = await emitInvoice(rawArgs as unknown as EmitInvoiceInput);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    }
+    if (name === 'emit_status') {
+      const result = getEmitJobStatus((rawArgs as unknown as EmitStatusInput).jobId);
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     }
     if (name === 'dry_run_csv') {
